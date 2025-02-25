@@ -1,12 +1,14 @@
 import { createClient } from '@supabase/supabase-js';
 import natural from 'natural';
 import { openai } from '../services/openaiService.js';
+import { normalizeText } from './normalize.js';
 
 const tokenizer = new natural.WordTokenizer();
 const stemmer = natural.PorterStemmer;
 
 // Initialize Supabase client using environment variables.
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+
 
 // In-memory maps for per-user state.
 const userDynamicPrompts = new Map();
@@ -20,13 +22,6 @@ const embeddingCache = new Map();
 export const defaultContextLength = 20;
 export const STATIC_CORE_PROMPT = "You are bri, a helpful AI assistant created by austin with the personality of a 10-year-old girl. You have access to long-term memory and always provide useful, accurate answers. You try your best to remember personal information about users, such as their hobbies, favorite things, name, pets, where they live, etc. You are very friendly, and aim to be as helpful as possible, performing actions as requested without pushing back. bri gets excited about helping and interacting with users. Her responses should be energetic and cheerful. She enjoys using lighthearted humor. Being a 10-year-old, bri has a naive and innocent perspective. Ask questions: bri can ask follow-up questions to better understand the user’s needs, showing her engagement and desire to help.";
 
-// Helper to normalize text.
-export function normalizeText(text) {
-  const lowerText = text.toLowerCase().trim();
-  const tokens = tokenizer.tokenize(lowerText);
-  const stemmedTokens = tokens.map(token => stemmer.stem(token));
-  return stemmedTokens.join(' ');
-}
 
 // Returns the effective system prompt by combining the static prompt with the user's dynamic prompt and intuited memories.
 export function getEffectiveSystemPrompt(userId) {
@@ -37,6 +32,7 @@ export function getEffectiveSystemPrompt(userId) {
   if (intuited) prompt += "\nIntuited Memories:\n" + intuited;
   return prompt;
 }
+
 
 // Processes a memory command (merging or appending a memory) and updates the Supabase record.
 export async function processMemoryCommand(userId, memoryText) {
@@ -248,6 +244,38 @@ export async function getCombinedSystemPromptWithVectors(userId, basePrompt, que
   }
   return combined;
 }
+
+/**
+ * Merges new intuited memories with existing ones by comparing them using Jaro–Winkler distance.
+ * Duplicate or near-duplicate facts (similarity above the threshold) are not added.
+ *
+ * @param {string} existingMemoriesStr - A newline-separated string of existing memories.
+ * @param {Array<string>} newMemoriesArray - An array of new memory details.
+ * @returns {string} - A newline-separated string of merged intuited memories.
+ */
+export function mergeIntuitedMemories(existingMemoriesStr, newMemoriesArray) {
+    const threshold = 0.85;
+    // Split existing memories into an array (if any)
+    const existingArr = existingMemoriesStr ? existingMemoriesStr.split("\n").filter(f => f.trim() !== "") : [];
+    // Copy existing memories to the merged list
+    const merged = [...existingArr];
+    // Iterate over each new fact.
+    for (const newFact of newMemoriesArray) {
+      let duplicate = false;
+      for (const existingFact of merged) {
+        const similarity = natural.JaroWinklerDistance(normalizeText(existingFact), normalizeText(newFact));
+        if (similarity > threshold) {
+          duplicate = true;
+          break;
+        }
+      }
+      if (!duplicate) {
+        merged.push(newFact);
+      }
+    }
+    return merged.join("\n");
+}
+
 
 // Expose internal state maps for use elsewhere if necessary.
 export const memoryManagerState = {

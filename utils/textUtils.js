@@ -29,7 +29,7 @@ export function splitMessage(text, maxLength = 2000) {
    * @param {Object} emojiMapping - An object mapping emoticon strings to emoji strings.
    * @returns {string} - The text with emoticons replaced by emojis.
    */
-  export function replaceEmoticons(text, emojiMapping) {
+  export function replaceEmoticons(text, emojiMapping = {}) {
     for (const [emoticon, emoji] of Object.entries(emojiMapping)) {
       text = text.split(emoticon).join(emoji);
     }

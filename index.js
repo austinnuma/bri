@@ -3,6 +3,7 @@ dotenv.config();
 
 import { Client, GatewayIntentBits, REST, Routes } from 'discord.js';
 import { logger } from './utils/logger.js';
+import { handleLegacyMessage } from './utils/messageHandler.js';
 
 // Import command modules
 import { askCommand } from './commands/ask.js';
@@ -15,17 +16,20 @@ import { setcontextCommand } from './commands/setcontext.js';
 import { setpromptCommand } from './commands/setprompt.js';
 
 //Other imports as needed :)
-import { getEffectiveSystemPrompt } from './utils/memoryManager.js';
-import { getCombinedSystemPromptWithVectors } from './utils/memoryManager.js';
-import { processMemoryCommand } from './utils/memoryManager.js';
-import { splitMessage } from './utils/textUtils.js';
-import { replaceEmoticons } from './utils/textUtils.js';
-import { openai } from './services/openaiService.js';
-import { defaultAskModel } from './services/openaiService.js';
-
+import { splitMessage, replaceEmoticons } from './utils/textUtils.js';
+import { openai, defaultAskModel } from './services/openaiService.js';
+import { supabase } from './services/supabaseService.js';
 
 // Import and initialize the memory manager (which holds in‑memory maps for dynamic prompts, conversations, etc.)
-import { initializeMemoryManager } from './utils/memoryManager.js';
+import { getEffectiveSystemPrompt, 
+  getCombinedSystemPromptWithVectors, 
+  processMemoryCommand, 
+  memoryManagerState, 
+  defaultContextLength, 
+  STATIC_CORE_PROMPT,
+  initializeMemoryManager } 
+from './utils/memoryManager.js';
+const { userConversations, userContextLengths, userDynamicPrompts } = memoryManagerState;
 initializeMemoryManager();
 
 // Create the Discord client with the required intents
@@ -91,64 +95,9 @@ client.on('interactionCreate', async (interaction) => {
   }
 });
 
-// Legacy message handling for non-slash commands
+// Message handler: process messages that are not slash commands.
 client.on('messageCreate', async (message) => {
-  // Ignore bot messages
-  if (message.author.bot) return;
-
-  // Determine if the channel is designated (no prefix needed) or not.
-  const isDesignated = (message.channel.id === process.env.CHANNEL_ID);
-  let cleanedContent = message.content;
-  
-  // For non-designated channels, require a prefix like "hey bri" or "bri"
-  if (!isDesignated) {
-    const prefixRegex = /^(hey\s+)?bri[\s,]+/i;
-    if (!prefixRegex.test(message.content)) return;
-    cleanedContent = message.content.replace(prefixRegex, '').trim();
-  }
-  
-  // Example: If the message is a legacy memory command:
-  const memoryRegex = /^(?:can you\s+)?remember\s+(.*)/i;
-  const memoryMatch = cleanedContent.match(memoryRegex);
-  if (memoryMatch) {
-    const memoryText = memoryMatch[1].trim();
-    // Import processMemoryCommand from your memoryManager module.
-    const result = await processMemoryCommand(message.author.id, memoryText);
-    await message.channel.send(result.success ? result.message : result.error);
-    return;
-  }
-  
-  // Example: Otherwise, treat the message as a general query (ask command).
-  // You can import getEffectiveSystemPrompt and getCombinedSystemPromptWithVectors
-  // from your memoryManager module.
-  const effectiveSystemPrompt = getEffectiveSystemPrompt(message.author.id);
-  const combinedSystemPrompt = await getCombinedSystemPromptWithVectors(message.author.id, effectiveSystemPrompt, cleanedContent);
-  const messagesArray = [
-    { role: "system", content: combinedSystemPrompt },
-    { role: "user", content: cleanedContent }
-  ];
-  
-  try {
-    const completion = await openai.chat.completions.create({
-      model: defaultAskModel,
-      messages: messagesArray,
-      max_tokens: 3000,
-    });
-    let reply = completion.choices[0].message.content;
-    //reply = replaceEmoticons(reply, emojiMapping); // Ensure you pass the emoji mapping
-    // Send reply (splitting if necessary)
-    if (reply.length > 2000) {
-      const chunks = splitMessage(reply, 2000);
-      for (const chunk of chunks) {
-        await message.channel.send(chunk);
-      }
-    } else {
-      await message.channel.send(reply);
-    }
-  } catch (error) {
-    console.error("Error from OpenAI API in legacy message handler:", error);
-    await message.channel.send("Sorry, an error occurred processing your message.");
-  }
+  await handleLegacyMessage(message);
 });
 
 
