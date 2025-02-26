@@ -2,7 +2,7 @@ import { createClient } from '@supabase/supabase-js';
 import natural from 'natural';
 import { openai } from '../services/openaiService.js';
 import { normalizeText } from './normalize.js';
-import { getEmbedding } from './embeddings.js';
+import { getEmbedding, embeddingCache } from './embeddings.js';
 import { personalityToString, userPersonalityPrefs } from './personality.js';
 
 const tokenizer = new natural.WordTokenizer();
@@ -16,7 +16,6 @@ const userDynamicPrompts = new Map();
 const userConversations = new Map();
 const userContextLengths = new Map();
 // (Intuited memories are now stored in the database, so we no longer store them in memory.)
-const embeddingCache = new Map();
 
 // Default values.
 export const defaultContextLength = 20;
@@ -88,7 +87,8 @@ export async function processMemoryCommand(userId, memoryText) {
 // Updates or inserts a memory using OpenAI embeddings and Supabase RPC.
 export async function updateOrInsertMemory(userId, newText) {
   const normalizedNewText = normalizeText(newText);
-  let newEmbedding;
+  const newEmbedding = await getEmbedding(newText);
+
   if (embeddingCache.has(normalizedNewText)) {
     newEmbedding = embeddingCache.get(normalizedNewText);
   } else {
@@ -121,7 +121,7 @@ export async function updateOrInsertMemory(userId, newText) {
 // Replaces an existing memory with new text.
 export async function performMemoryReplace(userId, existingMemory, newText) {
   const normalizedNew = normalizeText(newText);
-  let newEmbedding;
+  const newEmbedding = await getEmbedding(newText);
   if (embeddingCache.has(normalizedNew)) {
     newEmbedding = embeddingCache.get(normalizedNew);
   } else {
@@ -158,7 +158,7 @@ export async function performMemoryReplace(userId, existingMemory, newText) {
 // Inserts a new memory.
 export async function insertNewMemory(userId, text) {
   const normalizedText = normalizeText(text);
-  let newEmbedding;
+  const newEmbedding = await getEmbedding(newText);
   if (embeddingCache.has(normalizedText)) {
     newEmbedding = embeddingCache.get(normalizedText);
   } else {
@@ -195,7 +195,7 @@ export async function insertNewMemory(userId, text) {
 export async function retrieveRelevantMemories(userId, query, limit = 3) {
   const RECALL_THRESHOLD = 0.6;
   const normalizedQuery = normalizeText(query);
-  let queryEmbedding;
+  const newEmbedding = await getEmbedding(newText);
   if (embeddingCache.has(normalizedQuery)) {
     queryEmbedding = embeddingCache.get(normalizedQuery);
   } else {
@@ -247,7 +247,7 @@ export async function getCombinedSystemPromptWithVectors(userId, basePrompt, que
 // Inserts an intuited memory into the dedicated table.
 export async function insertIntuitedMemory(userId, memoryText) {
     const normalizedText = normalizeText(memoryText);
-    let newEmbedding;
+    const newEmbedding = await getEmbedding(newText);
     if (embeddingCache.has(normalizedText)) {
       newEmbedding = embeddingCache.get(normalizedText);
     } else {

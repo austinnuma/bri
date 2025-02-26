@@ -3,10 +3,9 @@ import OpenAI from 'openai';
 import { normalizeText } from './normalize.js';
 
 // Create an instance of the OpenAI API client using your API key.
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-
+import { openai } from '../services/openaiService.js';
 // Create an in-memory cache to store embeddings.
-const embeddingCache = new Map();
+export const embeddingCache = new Map();
 
 /**
  * Retrieves the embedding for a given text.
