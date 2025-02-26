@@ -13,6 +13,8 @@ import { supabase } from '../services/supabaseService.js';
 import { logger } from './logger.js';
 import { extractIntuitedMemories } from './extraction.js';
 import { summarizeConversation } from './summarization.js';
+// Import the new user memory utilities
+import { detectUserQuery, handleUserInfoQuery } from './userMemory.js';
 
 const { userConversations, userContextLengths, userDynamicPrompts } = memoryManagerState;
 
@@ -21,7 +23,7 @@ const INACTIVITY_THRESHOLD = 8 * 60 * 60 * 1000; // 8 hours
 
 // We'll store the last summary timestamp per user in memory.
 const lastSummaryTimestamps = new Map();
-// NEW: Track new messages since last extraction
+// Track new messages since last extraction
 const userMessageCounters = new Map();
 
 /**
@@ -40,6 +42,7 @@ export async function handleLegacyMessage(message) {
   let cleanedContent = message.content;
 
   if (!isDesignated) {
+    // Fixed regex to match just "bri" without requiring additional "i"s
     const prefixRegex = /^(hey\s+)?bri+\b/i;
     if (!prefixRegex.test(message.content)) return;
     cleanedContent = message.content.replace(prefixRegex, '').trim();
@@ -57,6 +60,39 @@ export async function handleLegacyMessage(message) {
       await message.channel.send("Sorry, an error occurred processing your memory command.");
     }
     return;
+  }
+
+  // NEW: Check if this is a query about another user
+  const userQuery = detectUserQuery(cleanedContent);
+  if (userQuery) {
+    try {
+      logger.info(`User ${message.author.id} asked about ${userQuery.username}'s ${userQuery.query}`);
+      
+      // Send typing indicator while processing
+      await message.channel.sendTyping();
+      
+      const response = await handleUserInfoQuery(
+        message.author.id, 
+        userQuery.username, 
+        userQuery.query
+      );
+      
+      if (response) {
+        if (response.length > 2000) {
+          const chunks = splitMessage(response, 2000);
+          for (const chunk of chunks) {
+            await message.channel.send(chunk);
+          }
+        } else {
+          await message.reply(response);
+        }
+        return; // Exit early, we've handled the query
+      }
+      // If no response, continue with normal processing
+    } catch (error) {
+      logger.error("Error handling user info query", { error, query: userQuery });
+      // Continue with normal processing
+    }
   }
 
   const effectiveSystemPrompt = getEffectiveSystemPrompt(message.author.id);
@@ -95,7 +131,12 @@ export async function handleLegacyMessage(message) {
       updated_at: new Date().toISOString(),
     });
 
-    // UPDATED: Increment message counter for this user
+    // Update username mapping (if we're tracking this)
+    updateUserMapping(message).catch(err => {
+      logger.error("Error updating user mapping", { error: err });
+    });
+
+    // Increment message counter for this user
     const currentCount = userMessageCounters.get(message.author.id) || 0;
     userMessageCounters.set(message.author.id, currentCount + 1);
 
@@ -173,5 +214,26 @@ async function summarizeAndExtract(userId, conversation) {
     }
   } catch (error) {
     logger.error(`Error in background summarization process: ${error}`);
+  }
+}
+
+/**
+ * Updates the user mapping table with the latest user information
+ * @param {Message} message - The Discord message
+ */
+async function updateUserMapping(message) {
+  try {
+    // Skip if missing required information
+    if (!message.author || !message.author.id || !message.author.username) return;
+    
+    await supabase.from('discord_users').upsert({
+      user_id: message.author.id,
+      username: message.author.username,
+      nickname: message.member?.nickname || null,
+      server_id: message.guild?.id || null,
+      last_active: new Date().toISOString()
+    });
+  } catch (error) {
+    logger.error("Error updating user mapping", { error });
   }
 }
