@@ -194,22 +194,13 @@ export async function insertNewMemory(userId, text) {
 // Retrieves generic memories from Supabase based on similarity.
 export async function retrieveRelevantMemories(userId, query, limit = 3) {
   const RECALL_THRESHOLD = 0.6;
-  const normalizedQuery = normalizeText(query);
-  const newEmbedding = await getEmbedding(newText);
-  if (embeddingCache.has(normalizedQuery)) {
-    queryEmbedding = embeddingCache.get(normalizedQuery);
-  } else {
-    try {
-      const embeddingResponse = await openai.embeddings.create({
-        model: "text-embedding-ada-002",
-        input: normalizedQuery,
-      });
-      queryEmbedding = embeddingResponse.data[0].embedding;
-      embeddingCache.set(normalizedQuery, queryEmbedding);
-    } catch (error) {
-      console.error("Error computing embedding for query:", error);
-      return "";
-    }
+  let queryEmbedding;
+  try {
+    // Make sure we're passing 'query', not 'newText'
+    queryEmbedding = await getEmbedding(query);
+  } catch (error) {
+    console.error("Error computing embedding for query:", error);
+    return "";
   }
   try {
     const { data, error } = await supabase.rpc('match_memories', {
