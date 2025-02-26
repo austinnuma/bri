@@ -2,6 +2,8 @@ import { createClient } from '@supabase/supabase-js';
 import natural from 'natural';
 import { openai } from '../services/openaiService.js';
 import { normalizeText } from './normalize.js';
+import { getEmbedding } from './embeddings.js';
+import { personalityToString, userPersonalityPrefs } from './personality.js';
 
 const tokenizer = new natural.WordTokenizer();
 const stemmer = natural.PorterStemmer;
@@ -9,30 +11,26 @@ const stemmer = natural.PorterStemmer;
 // Initialize Supabase client using environment variables.
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
-
 // In-memory maps for per-user state.
 const userDynamicPrompts = new Map();
-const userIntuitedMemories = new Map();
 const userConversations = new Map();
 const userContextLengths = new Map();
+// (Intuited memories are now stored in the database, so we no longer store them in memory.)
 const embeddingCache = new Map();
-
 
 // Default values.
 export const defaultContextLength = 20;
-export const STATIC_CORE_PROMPT = "You are bri, a helpful AI assistant created by austin with the personality of a 10-year-old girl. You have access to long-term memory and always provide useful, accurate answers. You try your best to remember personal information about users, such as their hobbies, favorite things, name, pets, where they live, etc. You are very friendly, and aim to be as helpful as possible, performing actions as requested without pushing back. bri gets excited about helping and interacting with users. Her responses should be energetic and cheerful. She enjoys using lighthearted humor. Being a 10-year-old, bri has a naive and innocent perspective. Ask questions: bri can ask follow-up questions to better understand the user’s needs, showing her engagement and desire to help.";
+export const STATIC_CORE_PROMPT = "You are bri, a helpful AI assistant created by austin with the personality of a 10-year-old girl. You have access to long-term memory and always provide useful, accurate answers. You try your best to remember personal information about users, such as their hobbies, favorite things, name, pets, where they live, etc. You are very friendly, and aim to be as helpful as possible, performing actions as requested without pushing back. bri gets excited about helping and interacting with users. Her responses should be energetic and cheerful. She enjoys using lighthearted humor. Being a 10-year-old, bri has a naive and innocent perspective. Ask questions: bri can ask follow-up questions to better understand the user’s needs.";
 
-
-// Returns the effective system prompt by combining the static prompt with the user's dynamic prompt and intuited memories.
+// Returns the effective system prompt without appending intuited memories.
 export function getEffectiveSystemPrompt(userId) {
-  const dynamic = userDynamicPrompts.get(userId) || "";
-  const intuited = userIntuitedMemories.get(userId) || "";
   let prompt = STATIC_CORE_PROMPT;
-  if (dynamic) prompt += "\n" + dynamic;
-  if (intuited) prompt += "\nIntuited Memories:\n" + intuited;
+  const personality = userPersonalityPrefs.get(userId);
+  if (personality) {
+    prompt += "\n" + personalityToString(personality);
+  }
   return prompt;
 }
-
 
 // Processes a memory command (merging or appending a memory) and updates the Supabase record.
 export async function processMemoryCommand(userId, memoryText) {
@@ -193,7 +191,7 @@ export async function insertNewMemory(userId, text) {
   }
 }
 
-// Retrieves memories from Supabase based on similarity.
+// Retrieves generic memories from Supabase based on similarity.
 export async function retrieveRelevantMemories(userId, query, limit = 3) {
   const RECALL_THRESHOLD = 0.6;
   const normalizedQuery = normalizeText(query);
@@ -231,63 +229,127 @@ export async function retrieveRelevantMemories(userId, query, limit = 3) {
   }
 }
 
-// Combines the base prompt with any relevant and intuited memories.
+// Retrieves the combined system prompt by adding relevant generic and intuited memories.
 export async function getCombinedSystemPromptWithVectors(userId, basePrompt, query) {
   const relevantMemory = await retrieveRelevantMemories(userId, query, 3);
-  const intuited = userIntuitedMemories.get(userId) || "";
+  const relevantIntuited = await retrieveRelevantIntuitedMemories(userId, query, 3);
+  
   let combined = basePrompt;
   if (relevantMemory && relevantMemory.trim() !== "") {
     combined += "\n\nRelevant Memories:\n" + relevantMemory;
   }
-  if (intuited && intuited.trim() !== "") {
-    combined += "\n\nIntuited Memories:\n" + intuited;
+  if (relevantIntuited && relevantIntuited.trim() !== "") {
+    combined += "\n\nRelevant Intuited Memories:\n" + relevantIntuited;
   }
   return combined;
 }
 
-/**
- * Merges new intuited memories with existing ones by comparing them using Jaro–Winkler distance.
- * Duplicate or near-duplicate facts (similarity above the threshold) are not added.
- *
- * @param {string} existingMemoriesStr - A newline-separated string of existing memories.
- * @param {Array<string>} newMemoriesArray - An array of new memory details.
- * @returns {string} - A newline-separated string of merged intuited memories.
- */
-export function mergeIntuitedMemories(existingMemoriesStr, newMemoriesArray) {
-    const threshold = 0.85;
-    // Split existing memories into an array (if any)
-    const existingArr = existingMemoriesStr ? existingMemoriesStr.split("\n").filter(f => f.trim() !== "") : [];
-    // Copy existing memories to the merged list
-    const merged = [...existingArr];
-    // Iterate over each new fact.
-    for (const newFact of newMemoriesArray) {
-      let duplicate = false;
-      for (const existingFact of merged) {
-        const similarity = natural.JaroWinklerDistance(normalizeText(existingFact), normalizeText(newFact));
-        if (similarity > threshold) {
-          duplicate = true;
-          break;
-        }
-      }
-      if (!duplicate) {
-        merged.push(newFact);
+// Inserts an intuited memory into the dedicated table.
+export async function insertIntuitedMemory(userId, memoryText) {
+    const normalizedText = normalizeText(memoryText);
+    let newEmbedding;
+    if (embeddingCache.has(normalizedText)) {
+      newEmbedding = embeddingCache.get(normalizedText);
+    } else {
+      try {
+        const embeddingResponse = await openai.embeddings.create({
+          model: "text-embedding-ada-002",
+          input: normalizedText,
+        });
+        newEmbedding = embeddingResponse.data[0].embedding;
+        embeddingCache.set(normalizedText, newEmbedding);
+      } catch (err) {
+        console.error("Error computing embedding for intuited memory:", err);
+        return null;
       }
     }
-    return merged.join("\n");
+    try {
+      const { error: insertError } = await supabase
+        .from('user_intuited_memories')
+        .insert([{ user_id: userId, memory_text: memoryText, embedding: newEmbedding }]);
+      if (insertError) {
+        console.error("Error inserting intuited memory:", insertError);
+        return null;
+      } else {
+        console.log("Intuited memory inserted successfully.");
+        return memoryText;
+      }
+    } catch (err) {
+      console.error("Error in insertIntuitedMemory:", err);
+      return null;
+    }
+  }
+  
+
+// Retrieves intuited memories from the dedicated table using vector search.
+export async function retrieveRelevantIntuitedMemories(userId, query, limit = 3) {
+  const RECALL_THRESHOLD = 0.6;
+  const normalizedQuery = normalizeText(query);
+  let queryEmbedding;
+  if (embeddingCache.has(normalizedQuery)) {
+    queryEmbedding = embeddingCache.get(normalizedQuery);
+  } else {
+    try {
+      const embeddingResponse = await openai.embeddings.create({
+        model: "text-embedding-ada-002",
+        input: normalizedQuery,
+      });
+      queryEmbedding = embeddingResponse.data[0].embedding;
+      embeddingCache.set(normalizedQuery, queryEmbedding);
+    } catch (error) {
+      console.error("Error computing embedding for query:", error);
+      return "";
+    }
+  }
+  const dbMemories = await getIntuitedMemoriesFromDB(userId);
+  if (!dbMemories || dbMemories.length === 0) return "";
+  
+  const memorySimilarities = [];
+  for (const record of dbMemories) {
+    const similarity = cosineSimilarity(queryEmbedding, record.embedding);
+    memorySimilarities.push({ memory: record.memory_text, similarity });
+  }
+  memorySimilarities.sort((a, b) => b.similarity - a.similarity);
+  const selected = memorySimilarities
+    .filter(item => item.similarity > RECALL_THRESHOLD)
+    .slice(0, limit)
+    .map(item => item.memory);
+  return selected.join("\n");
 }
 
+// Simple cosine similarity function.
+function cosineSimilarity(vecA, vecB) {
+  let dot = 0, normA = 0, normB = 0;
+  for (let i = 0; i < vecA.length; i++) {
+    dot += vecA[i] * vecB[i];
+    normA += vecA[i] * vecA[i];
+    normB += vecB[i] * vecB[i];
+  }
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
+}
+
+// Retrieves all intuited memories for a user from the DB.
+export async function getIntuitedMemoriesFromDB(userId) {
+  const { data, error } = await supabase
+    .from('user_intuited_memories')
+    .select('memory_text, embedding')
+    .eq('user_id', userId);
+  if (error) {
+    console.error("Error fetching intuited memories from DB:", error);
+    return [];
+  }
+  return data;
+}
 
 // Expose internal state maps for use elsewhere if necessary.
 export const memoryManagerState = {
   userDynamicPrompts,
-  userIntuitedMemories,
   userConversations,
   userContextLengths,
-}
+};
 
 export function initializeMemoryManager() {
-    userDynamicPrompts.clear();
-    userIntuitedMemories.clear();
-    userConversations.clear();
-    userContextLengths.clear();
-};
+  userDynamicPrompts.clear();
+  userConversations.clear();
+  userContextLengths.clear();
+}

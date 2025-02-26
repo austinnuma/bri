@@ -14,6 +14,7 @@ import { recallCommand } from './commands/recall.js';
 import { rememberCommand } from './commands/remember.js';
 import { setcontextCommand } from './commands/setcontext.js';
 import { setpromptCommand } from './commands/setprompt.js';
+import { personalityCommand } from './commands/personality.js';
 
 //Other imports as needed :)
 import { splitMessage, replaceEmoticons } from './utils/textUtils.js';
@@ -52,6 +53,7 @@ const commands = [
   rememberCommand,
   setcontextCommand,
   setpromptCommand,
+  personalityCommand,
 ];
 
 // Create a REST instance for command registration.
