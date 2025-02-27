@@ -1,8 +1,9 @@
 import { openai } from '../services/openaiService.js';
 import { stripCodeBlock } from './textUtils.js';
 import natural from 'natural';
-import { getIntuitedMemoriesFromDB } from './memoryManager.js';
+import { getAllMemories, MemoryTypes, insertIntuitedMemory } from './unifiedMemoryManager.js';
 import { normalizeText } from './normalize.js';
+import { logger } from './logger.js';
 
 const summarizationModel = "gpt-3.5-turbo";
 
@@ -64,7 +65,7 @@ SUMMARY: ${summaryText}`;
       extractedFacts = JSON.parse(output);
       if (!Array.isArray(extractedFacts)) extractedFacts = [];
     } catch (e) {
-      console.error("Error parsing extraction JSON:", e);
+      logger.error("Error parsing extraction JSON:", e);
       extractedFacts = [];
     }
     
@@ -78,7 +79,7 @@ SUMMARY: ${summaryText}`;
     
     return deduplicatedFacts;
   } catch (error) {
-    console.error("Error extracting intuited memories:", error);
+    logger.error("Error extracting intuited memories:", error);
     return [];
   }
 }
@@ -92,8 +93,8 @@ SUMMARY: ${summaryText}`;
  * @returns {Promise<Array<string>>} - Deduplicated facts
  */
 async function deduplicateAgainstExisting(newFacts, userId) {
-  // Get existing memories from database
-  const existingMemories = await getIntuitedMemoriesFromDB(userId);
+  // Get existing intuited memories from the unified memory table
+  const existingMemories = await getAllMemories(userId, MemoryTypes.INTUITED);
   
   if (!existingMemories || existingMemories.length === 0) {
     return newFacts; // No existing memories to deduplicate against

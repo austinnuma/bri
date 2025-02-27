@@ -1,53 +1,49 @@
-import { getEffectiveSystemPrompt, getCombinedSystemPromptWithVectors} from '../utils/memoryManager.js';
-import { splitMessage, replaceEmoticons } from '../utils/textUtils.js';
-import { ApplicationCommandOptionType } from 'discord.js';
-import OpenAI from 'openai';
-import { defaultAskModel } from '../services/openaiService.js';
+import { getEffectiveSystemPrompt, getCombinedSystemPromptWithMemories } from '../utils/unifiedMemoryManager.js';
+import { SlashCommandBuilder } from '@discordjs/builders';
+import { openai, defaultAskModel } from '../services/openaiService.js';
+import { replaceEmoticons } from '../utils/textUtils.js';
+import { logger } from '../utils/logger.js';
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+export const data = new SlashCommandBuilder()
+  .setName('ask')
+  .setDescription('Ask bri a question')
+  .addStringOption(option =>
+    option.setName('query')
+      .setDescription('What would you like to ask?')
+      .setRequired(true));
 
-export const askCommand = {
-    name: 'ask',
-    description: 'Ask the bot a question.',
-    options: [
-      {
-        name: 'question',
-        type: ApplicationCommandOptionType.String,
-        description: 'Your question',
-        required: true,
-      }
-    ],
-  
-
-async execute(interaction) {
-    const question = interaction.options.getString('question');
-    const effectiveSystemPrompt = getEffectiveSystemPrompt(interaction.user.id);
-    const combinedSystemPrompt = await getCombinedSystemPromptWithVectors(interaction.user.id, effectiveSystemPrompt, question);
-    const messages = [
-      { role: "system", content: combinedSystemPrompt },
-      { role: "user", content: question }
-    ];
+export async function execute(interaction) {
+  try {
     await interaction.deferReply();
-    try {
-      const completion = await openai.chat.completions.create({
-        model: defaultAskModel,
-        messages: messages,
-        max_tokens: 3000,
-      });
-      let answer = completion.choices[0].message.content;
-      answer = replaceEmoticons(answer);
-      if (answer.length > 2000) {
-        const chunks = splitMessage(answer, 2000);
-        await interaction.editReply(chunks[0]);
-        for (let i = 1; i < chunks.length; i++) {
-          await interaction.followUp(chunks[i]);
-        }
-      } else {
-        await interaction.editReply(answer);
-      }
-    } catch (error) {
-      console.error("Error in /ask:", error);
-      await interaction.editReply("Sorry, an error occurred.");
-    }
-  },
-};
+    
+    const userId = interaction.user.id;
+    const query = interaction.options.getString('query');
+    
+    // Get the system prompt and enrich it with relevant memories
+    const systemPrompt = getEffectiveSystemPrompt(userId);
+    const combinedPrompt = await getCombinedSystemPromptWithMemories(userId, systemPrompt, query);
+    
+    // Simple message context with just the query
+    const messages = [
+      { role: "system", content: combinedPrompt },
+      { role: "user", content: query },
+    ];
+    
+    // Get completion from OpenAI
+    const completion = await openai.chat.completions.create({
+      model: defaultAskModel,
+      messages: messages,
+      max_tokens: 2000,
+    });
+    
+    // Process and send the response
+    let reply = completion.choices[0].message.content;
+    reply = replaceEmoticons(reply);
+    
+    await interaction.editReply(reply);
+    logger.info(`Handled /ask command for user ${userId}`);
+  } catch (error) {
+    logger.error('Error executing ask command:', error);
+    await interaction.editReply('Sorry, there was an error processing your question.');
+  }
+}

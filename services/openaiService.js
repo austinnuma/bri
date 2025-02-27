@@ -1,47 +1,93 @@
+// services/openaiService.js
 import OpenAI from 'openai';
-export const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-export const defaultAskModel = "gpt-4o-mini";
+import { logger } from '../utils/logger.js';
+
+// Initialize the OpenAI client
+export const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY,
+});
+
+// Default models
+let _defaultAskModel = process.env.DEFAULT_MODEL || 'gpt-4o-mini';
+const _summarizationModel = process.env.SUMMARIZATION_MODEL || 'gpt-3.5-turbo';
+const _embeddingModel = process.env.EMBEDDING_MODEL || 'text-embedding-ada-002';
 
 /**
- * Creates a chat completion using OpenAI's Chat Completion API.
- *
- * @param {Object} options - Options for the chat completion.
- * @param {string} [options.model="gpt-3.5-turbo"] - The model to use.
- * @param {Array<Object>} options.messages - Array of message objects { role, content }.
- * @param {number} [options.max_tokens=1500] - Maximum tokens to generate.
- * @returns {Promise<Object>} - The API response.
+ * Get the default model for ask queries
+ * @returns {string} - The default model name
  */
-export async function getChatCompletion({ model = "gpt-3.5-turbo", messages, max_tokens = 1500 }) {
+export const defaultAskModel = _defaultAskModel;
+
+/**
+ * Set the default model for ask queries
+ * @param {string} modelName - The model name to set as default
+ * @returns {string} - The new default model name
+ */
+export function setDefaultAskModel(modelName) {
+  // Validate the model name
+  const validModels = ['gpt-4o', 'gpt-4o-mini', 'gpt-3.5-turbo'];
+  if (!validModels.includes(modelName)) {
+    logger.warn(`Invalid model name: ${modelName}, defaulting to gpt-4o-mini`);
+    _defaultAskModel = 'gpt-4o-mini';
+    return _defaultAskModel;
+  }
+
+  logger.info(`Changing default model from ${_defaultAskModel} to ${modelName}`);
+  _defaultAskModel = modelName;
+  return _defaultAskModel;
+}
+
+/**
+ * Get the current default model
+ * @returns {string} - The current default model
+ */
+export function getCurrentModel() {
+  return _defaultAskModel;
+}
+
+/**
+ * Gets the model used for summarization
+ * @returns {string} - The summarization model
+ */
+export function getSummarizationModel() {
+  return _summarizationModel;
+}
+
+/**
+ * Gets the model used for embeddings
+ * @returns {string} - The embedding model
+ */
+export function getEmbeddingModel() {
+  return _embeddingModel;
+}
+
+/**
+ * Create a chat completion with error handling
+ * @param {Object} params - Parameters for the completion
+ * @returns {Promise<Object>} - The completion response
+ */
+export async function createChatCompletion(params) {
   try {
-    const response = await openai.chat.completions.create({
-      model,
-      messages,
-      max_tokens,
-    });
-    return response;
+    return await openai.chat.completions.create(params);
   } catch (error) {
-    console.error("Error creating chat completion:", error);
+    logger.error('Error creating chat completion', { error, params });
     throw error;
   }
 }
 
 /**
- * Retrieves an embedding vector for the given text.
- *
- * @param {Object} options - Options for the embedding request.
- * @param {string} options.text - The text to embed.
- * @param {string} [options.model="text-embedding-ada-002"] - The embedding model to use.
- * @returns {Promise<any>} - The embedding vector.
+ * Create an embedding with error handling
+ * @param {Object} params - Parameters for the embedding
+ * @returns {Promise<Object>} - The embedding response
  */
-export async function getEmbedding({ text, model = "text-embedding-ada-002" }) {
+export async function createEmbedding(params) {
   try {
-    const response = await openai.embeddings.create({
-      model,
-      input: text,
+    return await openai.embeddings.create({
+      model: _embeddingModel,
+      ...params
     });
-    return response.data[0].embedding;
   } catch (error) {
-    console.error("Error creating embedding:", error);
+    logger.error('Error creating embedding', { error, params });
     throw error;
   }
 }

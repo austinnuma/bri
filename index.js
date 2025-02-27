@@ -1,111 +1,93 @@
-import dotenv from 'dotenv';
-dotenv.config();
-
-import { Client, GatewayIntentBits, REST, Routes } from 'discord.js';
+// Main entry point for the Bri Discord bot
+import { Client, GatewayIntentBits, Collection, REST, Routes } from 'discord.js';
+import 'dotenv/config';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
 import { logger } from './utils/logger.js';
 import { handleLegacyMessage } from './utils/messageHandler.js';
-
-// Import command modules
-import { askCommand } from './commands/ask.js';
-import { clearmemoriesCommand } from './commands/clearmemories.js';
-import { geminiCommand } from './commands/gemini.js';
-import { modelCommand } from './commands/model.js';
-import { recallCommand } from './commands/recall.js';
-import { rememberCommand } from './commands/remember.js';
-import { setcontextCommand } from './commands/setcontext.js';
-import { setpromptCommand } from './commands/setprompt.js';
-import { personalityCommand } from './commands/personality.js';
-
-//Other imports as needed :)
-import { splitMessage, replaceEmoticons } from './utils/textUtils.js';
-import { openai, defaultAskModel } from './services/openaiService.js';
+import { createMemory, MemoryTypes, MemoryCategories } from './utils/unifiedMemoryManager.js';
 import { supabase } from './services/supabaseService.js';
 
-// Import and initialize the memory manager (which holds in‑memory maps for dynamic prompts, conversations, etc.)
-import { getEffectiveSystemPrompt, 
-  getCombinedSystemPromptWithVectors, 
-  processMemoryCommand, 
-  memoryManagerState, 
-  defaultContextLength, 
-  STATIC_CORE_PROMPT,
-  initializeMemoryManager } 
-from './utils/memoryManager.js';
-const { userConversations, userContextLengths, userDynamicPrompts } = memoryManagerState;
-initializeMemoryManager();
+// Get directory name in ESM
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-
-// Create the Discord client with the required intents
+// Initialize Discord client with the required intents
 const client = new Client({
   intents: [
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
-    GatewayIntentBits.GuildMembers,
   ],
 });
 
-// Prepare an array of commands for slash command registration.
-const commands = [
-  askCommand,
-  clearmemoriesCommand,
-  geminiCommand,
-  modelCommand,
-  recallCommand,
-  rememberCommand,
-  setcontextCommand,
-  setpromptCommand,
-  personalityCommand,
-];
+// Create a new collection for slash commands
+client.commands = new Collection();
 
-// Create a REST instance for command registration.
-const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+// Load all command files dynamically
+const commandsPath = path.join(__dirname, 'commands');
+const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.js'));
 
-// When the client is ready, register slash commands.
-client.once('ready', async () => {
-  console.log(`Logged in as ${client.user.tag}!`);
-  
+// Create an array to store command data for registration
+const commands = [];
+
+// Load each command module
+for (const file of commandFiles) {
   try {
-    console.log('Refreshing application (/) commands.');
-    await rest.put(
-      Routes.applicationGuildCommands(client.user.id, process.env.GUILD_ID),
-      {
-        body: commands.map(cmd => ({
-          name: cmd.name,
-          description: cmd.description,
-          options: cmd.options || [],
-        })),
-      }
-    );
-    console.log('Successfully reloaded application (/) commands.');
-  } catch (error) {
-    console.error("Error registering commands:", error);
-  }
-});
-
-// Interaction handler: dispatch slash command interactions to the appropriate command module.
-client.on('interactionCreate', async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
-  
-  const command = commands.find(cmd => cmd.name === interaction.commandName);
-  if (command) {
-    try {
-      await command.execute(interaction);
-    } catch (error) {
-      logger.error('Interaction error', { error, command: interaction.commandName });
-      console.error("Error executing command:", error);
-      await interaction.reply({ content: 'There was an error executing that command.', ephemeral: true });
+    const filePath = path.join(commandsPath, file);
+    const commandModule = await import(`file://${filePath}`);
+    
+    // Check if the module has both required properties
+    if ('data' in commandModule && 'execute' in commandModule) {
+      commands.push(commandModule.data.toJSON());
+      client.commands.set(commandModule.data.name, commandModule);
+      logger.info(`Loaded command: ${commandModule.data.name}`);
+    } else {
+      logger.warn(`Command at ${filePath} is missing required "data" or "execute" property`);
     }
+  } catch (error) {
+    logger.error(`Error loading command from ${file}:`, error);
   }
-});
+}
 
-// Add this to index.js after bot initialization
-
-import { insertNewMemory } from './utils/memoryManager.js';
-import { logger } from './utils/logger.js';
-import { supabase } from './services/supabaseService.js';
-
+// ================ Memory Maintenance ================
 // Set up periodic memory maintenance
 const MEMORY_MAINTENANCE_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
+
+/**
+ * Helper function to categorize memory text
+ */
+function categorizeMemory(text) {
+  const lowered = text.toLowerCase();
+  
+  if (lowered.includes('name') || lowered.includes('age') || lowered.includes('birthday') || 
+      lowered.includes('family') || lowered.includes('live') || lowered.includes('from')) {
+    return MemoryCategories.PERSONAL;
+  }
+  
+  if (lowered.includes('job') || lowered.includes('work') || lowered.includes('career') || 
+      lowered.includes('study') || lowered.includes('school') || lowered.includes('college')) {
+    return MemoryCategories.PROFESSIONAL;
+  }
+  
+  if (lowered.includes('like') || lowered.includes('love') || lowered.includes('enjoy') || 
+      lowered.includes('favorite') || lowered.includes('prefer') || lowered.includes('hate')) {
+    return MemoryCategories.PREFERENCES;
+  }
+  
+  if (lowered.includes('hobby') || lowered.includes('play') || lowered.includes('game') ||
+      lowered.includes('sport') || lowered.includes('collect') || lowered.includes('activity')) {
+    return MemoryCategories.HOBBIES;
+  }
+  
+  if (lowered.includes('email') || lowered.includes('phone') || lowered.includes('contact') ||
+      lowered.includes('address') || lowered.includes('reach')) {
+    return MemoryCategories.CONTACT;
+  }
+  
+  return MemoryCategories.OTHER;
+}
 
 /**
  * Moves memories from the plain text memory field to vector storage
@@ -142,7 +124,19 @@ async function runMemoryMaintenance() {
       for (const memoryText of memories) {
         if (memoryText.length < 5) continue; // Skip very short entries
         
-        const result = await insertNewMemory(record.user_id, memoryText);
+        // Categorize the memory
+        const category = categorizeMemory(memoryText);
+        
+        // Create the memory in the unified system
+        const result = await createMemory(
+          record.user_id,
+          memoryText,
+          MemoryTypes.EXPLICIT,  // These are explicit memories
+          category,
+          1.0,                   // Full confidence for explicit memories
+          'memory_maintenance'   // Source of the memory
+        );
+        
         if (result) {
           processedMemories.push(memoryText);
           totalProcessed++;
@@ -178,10 +172,93 @@ runMemoryMaintenance().catch(err => {
 // Set up periodic maintenance
 setInterval(runMemoryMaintenance, MEMORY_MAINTENANCE_INTERVAL);
 
-// Message handler: process messages that are not slash commands.
-client.on('messageCreate', async (message) => {
-  await handleLegacyMessage(message);
+// ================ Bot Setup and Event Handlers ================
+
+// When the client is ready, run this code (only once)
+client.once('ready', () => {
+  logger.info(`Logged in as ${client.user.tag}!`);
+  
+  // Register slash commands
+  const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+  
+  // Get the client ID from the bot if not in environment variables
+  const clientId = process.env.CLIENT_ID || client.user.id;
+  
+  if (!clientId) {
+    logger.error('Failed to register commands: CLIENT_ID is not defined in environment variables and could not be retrieved from the bot.');
+    return;
+  }
+  
+  logger.info(`Registering commands for application ID: ${clientId}`);
+  
+  (async () => {
+    try {
+      logger.info('Started refreshing application (/) commands.');
+      
+      // Use the client ID we verified above
+      await rest.put(
+        Routes.applicationCommands(clientId),
+        { body: commands },
+      );
+      
+      logger.info('Successfully reloaded application (/) commands.');
+    } catch (error) {
+      logger.error('Error registering commands:', error);
+    }
+  })();
 });
 
+// Handle slash command interactions
+client.on('interactionCreate', async interaction => {
+  if (!interaction.isCommand()) return;
+  
+  const command = client.commands.get(interaction.commandName);
+  if (!command) return;
+  
+  try {
+    await command.execute(interaction);
+  } catch (error) {
+    logger.error(`Error executing command ${interaction.commandName}:`, error);
+    const reply = { content: 'There was an error while executing this command!', ephemeral: true };
+    
+    if (interaction.deferred || interaction.replied) {
+      await interaction.editReply(reply);
+    } else {
+      await interaction.reply(reply);
+    }
+  }
+});
 
+// Handle regular messages (non-slash commands)
+client.on('messageCreate', async (message) => {
+  try {
+    await handleLegacyMessage(message);
+  } catch (error) {
+    logger.error('Error in legacy message handler:', error);
+  }
+});
+
+// Log in to Discord with your token
 client.login(process.env.DISCORD_TOKEN);
+
+// Handle process termination gracefully
+process.on('SIGINT', () => {
+  logger.info('SIGINT received. Shutting down...');
+  client.destroy();
+  process.exit(0);
+});
+
+process.on('SIGTERM', () => {
+  logger.info('SIGTERM received. Shutting down...');
+  client.destroy();
+  process.exit(0);
+});
+
+// Handle uncaught exceptions and unhandled rejections
+process.on('uncaughtException', (error) => {
+  logger.error('Uncaught Exception:', error);
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
