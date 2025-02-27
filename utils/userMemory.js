@@ -4,6 +4,8 @@ import { supabase } from '../services/supabaseService.js';
 import { logger } from './logger.js';
 import { getEffectiveSystemPrompt } from './memoryManager.js';
 import { replaceEmoticons } from './textUtils.js';
+import { getEmbedding } from './embeddings.js';
+import natural from 'natural';
 
 /**
  * Detects if a message is asking about another user and extracts the username.
@@ -111,9 +113,19 @@ export async function handleUserInfoQuery(askingUserId, targetUsername, query) {
       return `I don't think I've met ${targetUsername} before! Or maybe they go by a different name?`;
     }
     
-    // Get relevant memories about the target user
-    const memories = await retrieveRelevantMemories(targetUserId, query);
-    if (!memories || memories.trim() === "") {
+    // Get memories from various sources
+    const vectorMemories = await retrieveRelevantMemories(targetUserId, query);
+    const plainTextMemories = await retrieveRelevantPlainTextMemories(targetUserId, query);
+    const intuitedMemories = await retrieveRelevantIntuitedMemoriesText(targetUserId, query);
+    
+    // Combine all memories into one string
+    const allMemories = [
+      vectorMemories, 
+      plainTextMemories, 
+      intuitedMemories
+    ].filter(m => m && m.trim() !== "").join("\n\n");
+    
+    if (!allMemories || allMemories.trim() === "") {
       return `I know ${targetUsername}, but I don't remember anything specific about their ${query}.`;
     }
     
@@ -121,7 +133,7 @@ export async function handleUserInfoQuery(askingUserId, targetUsername, query) {
     const promptText = `
 The user is asking about ${targetUsername}'s ${query}.
 Here are relevant memories I have about ${targetUsername}:
-${memories}
+${allMemories}
 
 Based on these memories, create a natural response about what I know about ${targetUsername}'s ${query}.
 If the memories don't contain clear information about their query, explain that I don't have specific information about that.
@@ -142,4 +154,161 @@ Remember to maintain my 10-year-old girl personality when responding.
     logger.error("Error handling user info query", { error });
     return null;
   }
+}
+
+/**
+ * Retrieves relevant plain text memories from the user_conversations table
+ * by scanning the memory field and finding lines that match the query.
+ * 
+ * @param {string} userId - The target user's ID
+ * @param {string} query - The search query
+ * @returns {Promise<string>} - Relevant memories as text
+ */
+async function retrieveRelevantPlainTextMemories(userId, query) {
+  try {
+    // Get the user's memories from the memory field
+    const { data, error } = await supabase
+      .from('user_conversations')
+      .select('memory')
+      .eq('user_id', userId)
+      .single();
+      
+    if (error || !data || !data.memory) {
+      return "";
+    }
+    
+    // Split the memories by newline
+    const memories = data.memory.split('\n').filter(m => m.trim() !== "");
+    if (memories.length === 0) {
+      return "";
+    }
+    
+    // Search for relevant memories using basic text similarity
+    const queryTerms = query.toLowerCase().split(/\s+/);
+    
+    // Score each memory based on how many query terms it contains
+    const scoredMemories = memories.map(memory => {
+      const text = memory.toLowerCase();
+      let score = 0;
+      
+      // Calculate how many query terms are in the memory
+      for (const term of queryTerms) {
+        if (text.includes(term)) {
+          score++;
+        }
+      }
+      
+      // Also use Jaro-Winkler distance for fuzzy matching
+      // (this helps catch slight variations in spelling)
+      let maxSimilarity = 0;
+      const memoryTerms = text.split(/\s+/);
+      for (const memTerm of memoryTerms) {
+        for (const queryTerm of queryTerms) {
+          const similarity = natural.JaroWinklerDistance(memTerm, queryTerm);
+          if (similarity > 0.85) { // High similarity threshold
+            score += 0.5; // Partial score for similar terms
+          }
+          maxSimilarity = Math.max(maxSimilarity, similarity);
+        }
+      }
+      
+      // Extra points if the entire query has a high similarity
+      if (text.includes(query.toLowerCase())) {
+        score += 3; // Big bonus for exact match
+      }
+      
+      return { memory, score, similarity: maxSimilarity };
+    });
+    
+    // Sort by score, highest first
+    scoredMemories.sort((a, b) => b.score - a.score || b.similarity - a.similarity);
+    
+    // Return the top memories (at least 25% relevant or top 3)
+    const threshold = Math.max(queryTerms.length * 0.25, 1); // At least 25% of terms
+    const relevantMemories = scoredMemories
+      .filter(m => m.score >= threshold)
+      .slice(0, 3) // Take top 3
+      .map(m => m.memory);
+      
+    return relevantMemories.join('\n');
+  } catch (error) {
+    logger.error("Error retrieving plain text memories", { error });
+    return "";
+  }
+}
+
+/**
+ * Helper function to retrieve relevant intuited memories in plain text form
+ * 
+ * @param {string} userId - The target user's ID
+ * @param {string} query - The search query
+ * @returns {Promise<string>} - Relevant intuited memories as text
+ */
+async function retrieveRelevantIntuitedMemoriesText(userId, query) {
+  try {
+    // Get all intuited memories for this user
+    const { data, error } = await supabase
+      .from('user_intuited_memories')
+      .select('memory_text, embedding')
+      .eq('user_id', userId);
+      
+    if (error || !data || data.length === 0) {
+      return "";
+    }
+    
+    // Get embedding for the query
+    let queryEmbedding;
+    try {
+      queryEmbedding = await getEmbedding(query);
+    } catch (err) {
+      logger.error("Error getting embedding for query", { error: err });
+      
+      // Fallback to text similarity if embedding fails
+      const queryTerms = query.toLowerCase().split(/\s+/);
+      const relevantMemories = data
+        .filter(item => {
+          const text = item.memory_text.toLowerCase();
+          return queryTerms.some(term => text.includes(term));
+        })
+        .slice(0, 3)
+        .map(item => item.memory_text);
+        
+      return relevantMemories.join('\n');
+    }
+    
+    // Calculate similarity for each memory
+    const RECALL_THRESHOLD = 0.6;
+    const similarities = data.map(item => {
+      const similarity = cosineSimilarity(queryEmbedding, item.embedding);
+      return {
+        memory: item.memory_text,
+        similarity
+      };
+    });
+    
+    // Sort by similarity (highest first) and filter by threshold
+    similarities.sort((a, b) => b.similarity - a.similarity);
+    const relevantMemories = similarities
+      .filter(item => item.similarity > RECALL_THRESHOLD)
+      .slice(0, 3)
+      .map(item => item.memory);
+      
+    return relevantMemories.join('\n');
+  } catch (error) {
+    logger.error("Error retrieving intuited memories", { error });
+    return "";
+  }
+}
+
+/**
+ * Helper function for cosine similarity calculation
+ */
+function cosineSimilarity(vecA, vecB) {
+  let dot = 0, normA = 0, normB = 0;
+  for (let i = 0; i < vecA.length; i++) {
+    dot += vecA[i] * vecB[i];
+    normA += vecA[i] * vecA[i];
+    normB += vecB[i] * vecB[i];
+  }
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }

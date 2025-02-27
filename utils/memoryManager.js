@@ -19,7 +19,7 @@ const userContextLengths = new Map();
 
 // Default values.
 export const defaultContextLength = 20;
-export const STATIC_CORE_PROMPT = "You are bri, a helpful AI assistant created by austin with the personality of a 10-year-old girl. You have access to long-term memory and always provide useful, accurate answers. You try your best to remember personal information about users, such as their hobbies, favorite things, name, pets, where they live, etc. You are very friendly, and aim to be as helpful as possible, performing actions as requested without pushing back. bri gets excited about helping and interacting with users. Her responses should be energetic and cheerful. She enjoys using lighthearted humor. Being a 10-year-old, bri has a naive and innocent perspective. Ask questions: bri can ask follow-up questions to better understand the user’s needs.";
+export const STATIC_CORE_PROMPT = "You are bri, a helpful AI assistant created by austin with the personality of a 10-year-old girl. You have access to long-term memory and always provide useful, accurate answers. You try your best to remember personal information about users, such as their hobbies, favorite things, name, pets, where they live, etc. You are very friendly, and aim to be as helpful as possible, performing actions as requested without pushing back. bri gets excited about helping and interacting with users. Her responses should be energetic and cheerful. She enjoys using lighthearted humor. Being a 10-year-old, bri has a naive and innocent perspective. Ask questions: bri can ask follow-up questions to better understand the user's needs.";
 
 // Returns the effective system prompt without appending intuited memories.
 export function getEffectiveSystemPrompt(userId) {
@@ -85,69 +85,51 @@ export async function processMemoryCommand(userId, memoryText) {
 }
 
 // Updates or inserts a memory using OpenAI embeddings and Supabase RPC.
-export async function updateOrInsertMemory(userId, newText) {
-  const normalizedNewText = normalizeText(newText);
-  const newEmbedding = await getEmbedding(newText);
-
-  if (embeddingCache.has(normalizedNewText)) {
-    newEmbedding = embeddingCache.get(normalizedNewText);
-  } else {
-    try {
-      const embeddingResponse = await openai.embeddings.create({
-        model: "text-embedding-ada-002",
-        input: normalizedNewText,
-      });
-      newEmbedding = embeddingResponse.data[0].embedding;
-      embeddingCache.set(normalizedNewText, newEmbedding);
-    } catch (err) {
-      console.error("Error computing embedding:", err);
-      return { merge: false, newText };
-    }
+export async function updateOrInsertMemory(userId, memoryText) {
+  const normalizedMemoryText = normalizeText(memoryText);
+  let newEmbedding;
+  
+  try {
+    // Use the shared getEmbedding function which handles caching
+    newEmbedding = await getEmbedding(memoryText);
+  } catch (err) {
+    console.error("Error computing embedding:", err);
+    return { merge: false, newText: memoryText };
   }
+  
   const VECTOR_UPDATE_THRESHOLD = 0.5;
   const { data, error } = await supabase.rpc('match_memories', {
     p_user_id: userId,
     p_query_embedding: newEmbedding,
     p_match_count: 1,
   });
+  
   if (error) console.error("Error retrieving vector memories:", error);
+  
   if (data && data.length > 0 && data[0].distance < VECTOR_UPDATE_THRESHOLD) {
-    return { merge: true, existingMemory: data[0].memory_text, newText };
+    return { merge: true, existingMemory: data[0].memory_text, newText: memoryText };
   } else {
-    return { merge: false, newText };
+    return { merge: false, newText: memoryText };
   }
 }
 
 // Replaces an existing memory with new text.
-export async function performMemoryReplace(userId, existingMemory, newText) {
-  const normalizedNew = normalizeText(newText);
-  const newEmbedding = await getEmbedding(newText);
-  if (embeddingCache.has(normalizedNew)) {
-    newEmbedding = embeddingCache.get(normalizedNew);
-  } else {
-    try {
-      const embeddingResponse = await openai.embeddings.create({
-        model: "text-embedding-ada-002",
-        input: normalizedNew,
-      });
-      newEmbedding = embeddingResponse.data[0].embedding;
-      embeddingCache.set(normalizedNew, newEmbedding);
-    } catch (err) {
-      console.error("Error computing embedding:", err);
-      return null;
-    }
-  }
+export async function performMemoryReplace(userId, existingMemory, memoryText) {
   try {
+    // Use the shared getEmbedding function which handles caching
+    const newEmbedding = await getEmbedding(memoryText);
+    
     const { error: updateError } = await supabase
       .from('user_memory_vectors')
-      .update({ memory_text: newText, embedding: newEmbedding })
-      .match({ user_id, memory_text: existingMemory });
+      .update({ memory_text: memoryText, embedding: newEmbedding })
+      .match({ user_id: userId, memory_text: existingMemory });
+      
     if (updateError) {
       console.error("Error updating memory vector:", updateError);
       return null;
     } else {
       console.log("Memory replaced successfully.");
-      return newText;
+      return memoryText;
     }
   } catch (err) {
     console.error("Error in performMemoryReplace:", err);
@@ -157,27 +139,14 @@ export async function performMemoryReplace(userId, existingMemory, newText) {
 
 // Inserts a new memory.
 export async function insertNewMemory(userId, text) {
-  const normalizedText = normalizeText(text);
-  const newEmbedding = await getEmbedding(newText);
-  if (embeddingCache.has(normalizedText)) {
-    newEmbedding = embeddingCache.get(normalizedText);
-  } else {
-    try {
-      const embeddingResponse = await openai.embeddings.create({
-        model: "text-embedding-ada-002",
-        input: normalizedText,
-      });
-      newEmbedding = embeddingResponse.data[0].embedding;
-      embeddingCache.set(normalizedText, newEmbedding);
-    } catch (err) {
-      console.error("Error computing embedding:", err);
-      return null;
-    }
-  }
   try {
+    // Use the shared getEmbedding function which handles caching
+    const newEmbedding = await getEmbedding(text);
+    
     const { error: insertError } = await supabase
       .from('user_memory_vectors')
-      .insert([{ user_id, memory_text: text, embedding: newEmbedding }]);
+      .insert([{ user_id: userId, memory_text: text, embedding: newEmbedding }]);
+      
     if (insertError) {
       console.error("Error inserting new memory vector:", insertError);
       return null;
@@ -195,23 +164,27 @@ export async function insertNewMemory(userId, text) {
 export async function retrieveRelevantMemories(userId, query, limit = 3) {
   const RECALL_THRESHOLD = 0.6;
   let queryEmbedding;
+  
   try {
-    // Make sure we're passing 'query', not 'newText'
+    // Use the shared getEmbedding function which handles caching
     queryEmbedding = await getEmbedding(query);
   } catch (error) {
     console.error("Error computing embedding for query:", error);
     return "";
   }
+  
   try {
     const { data, error } = await supabase.rpc('match_memories', {
       p_user_id: userId,
       p_query_embedding: queryEmbedding,
       p_match_count: limit,
     });
+    
     if (error) {
       console.error("Error retrieving vector memories:", error);
       return "";
     }
+    
     const filtered = data.filter(item => item.distance < RECALL_THRESHOLD);
     return filtered.map(item => item.memory_text).join("\n");
   } catch (err) {
@@ -237,61 +210,40 @@ export async function getCombinedSystemPromptWithVectors(userId, basePrompt, que
 
 // Inserts an intuited memory into the dedicated table.
 export async function insertIntuitedMemory(userId, memoryText) {
-    const normalizedText = normalizeText(memoryText);
-    const newEmbedding = await getEmbedding(newText);
-    if (embeddingCache.has(normalizedText)) {
-      newEmbedding = embeddingCache.get(normalizedText);
-    } else {
-      try {
-        const embeddingResponse = await openai.embeddings.create({
-          model: "text-embedding-ada-002",
-          input: normalizedText,
-        });
-        newEmbedding = embeddingResponse.data[0].embedding;
-        embeddingCache.set(normalizedText, newEmbedding);
-      } catch (err) {
-        console.error("Error computing embedding for intuited memory:", err);
-        return null;
-      }
-    }
-    try {
-      const { error: insertError } = await supabase
-        .from('user_intuited_memories')
-        .insert([{ user_id: userId, memory_text: memoryText, embedding: newEmbedding }]);
-      if (insertError) {
-        console.error("Error inserting intuited memory:", insertError);
-        return null;
-      } else {
-        console.log("Intuited memory inserted successfully.");
-        return memoryText;
-      }
-    } catch (err) {
-      console.error("Error in insertIntuitedMemory:", err);
+  try {
+    // Use the shared getEmbedding function which handles caching
+    const newEmbedding = await getEmbedding(memoryText);
+    
+    const { error: insertError } = await supabase
+      .from('user_intuited_memories')
+      .insert([{ user_id: userId, memory_text: memoryText, embedding: newEmbedding }]);
+      
+    if (insertError) {
+      console.error("Error inserting intuited memory:", insertError);
       return null;
+    } else {
+      console.log("Intuited memory inserted successfully.");
+      return memoryText;
     }
+  } catch (err) {
+    console.error("Error in insertIntuitedMemory:", err);
+    return null;
   }
-  
+}
 
 // Retrieves intuited memories from the dedicated table using vector search.
 export async function retrieveRelevantIntuitedMemories(userId, query, limit = 3) {
   const RECALL_THRESHOLD = 0.6;
-  const normalizedQuery = normalizeText(query);
   let queryEmbedding;
-  if (embeddingCache.has(normalizedQuery)) {
-    queryEmbedding = embeddingCache.get(normalizedQuery);
-  } else {
-    try {
-      const embeddingResponse = await openai.embeddings.create({
-        model: "text-embedding-ada-002",
-        input: normalizedQuery,
-      });
-      queryEmbedding = embeddingResponse.data[0].embedding;
-      embeddingCache.set(normalizedQuery, queryEmbedding);
-    } catch (error) {
-      console.error("Error computing embedding for query:", error);
-      return "";
-    }
+  
+  try {
+    // Use the shared getEmbedding function which handles caching
+    queryEmbedding = await getEmbedding(query);
+  } catch (error) {
+    console.error("Error computing embedding for query:", error);
+    return "";
   }
+  
   const dbMemories = await getIntuitedMemoriesFromDB(userId);
   if (!dbMemories || dbMemories.length === 0) return "";
   
@@ -300,11 +252,13 @@ export async function retrieveRelevantIntuitedMemories(userId, query, limit = 3)
     const similarity = cosineSimilarity(queryEmbedding, record.embedding);
     memorySimilarities.push({ memory: record.memory_text, similarity });
   }
+  
   memorySimilarities.sort((a, b) => b.similarity - a.similarity);
   const selected = memorySimilarities
     .filter(item => item.similarity > RECALL_THRESHOLD)
     .slice(0, limit)
     .map(item => item.memory);
+    
   return selected.join("\n");
 }
 
@@ -325,10 +279,12 @@ export async function getIntuitedMemoriesFromDB(userId) {
     .from('user_intuited_memories')
     .select('memory_text, embedding')
     .eq('user_id', userId);
+    
   if (error) {
     console.error("Error fetching intuited memories from DB:", error);
     return [];
   }
+  
   return data;
 }
 
