@@ -10,39 +10,171 @@ import {
   MemoryCategories 
 } from './unifiedMemoryManager.js';
 
+// Common English words that are often mistaken for usernames
+const COMMON_WORDS = new Set([
+  // Time-related
+  'today', 'tomorrow', 'yesterday', 'morning', 'evening', 'night', 'week', 'month', 'year',
+  
+  // Question topics
+  'your', 'their', 'that', 'this', 'these', 'those', 'there', 'here', 
+  
+  // Common subjects
+  'weather', 'time', 'news', 'information', 'computer', 'phone', 'data', 'system',
+  'people', 'person', 'human', 'world', 'country', 'city', 'place', 'thing',
+  
+  // Technical terms
+  'computer', 'software', 'hardware', 'program', 'device', 'internet', 'website',
+  'data', 'file', 'code', 'system', 'network', 'server', 'database', 'api',
+  'app', 'application', 'semiconductor', 'technology', 'artificial', 'intelligence',
+  
+  // Conversation words
+  'hello', 'help', 'please', 'thanks', 'thank', 'sorry', 'excuse',
+  
+  // Articles and connectors
+  'the', 'and', 'but', 'for', 'not', 'with', 'without', 'from', 'about'
+]);
+
+/**
+ * Cache of known Discord usernames to avoid repeated DB queries
+ * Format: { username: userId, ... }
+ */
+const usernameCache = new Map();
+
+/**
+ * Checks if a potential username is valid by checking against:
+ * 1. Known Discord users in our database
+ * 2. A list of common words that are unlikely to be usernames
+ * 
+ * @param {string} potentialUsername - The potential username to validate
+ * @returns {Promise<string|null>} - The user ID if valid, null otherwise
+ */
+async function validateUsername(potentialUsername) {
+  if (!potentialUsername || potentialUsername.length < 2) return null;
+  
+  // Normalize to lowercase for all checks
+  const username = potentialUsername.toLowerCase();
+  
+  // Check against common words list first (quick rejection)
+  if (COMMON_WORDS.has(username)) {
+    return null;
+  }
+  
+  // Check if we already know this is a valid username
+  if (usernameCache.has(username)) {
+    return usernameCache.get(username);
+  }
+  
+  // Query the database to check if this is a known Discord username or nickname
+  try {
+    const { data, error } = await supabase
+      .from('discord_users')
+      .select('user_id')
+      .or(`username.ilike.${username},nickname.ilike.${username}`)
+      .limit(1);
+      
+    if (error) {
+      logger.error("Error validating username:", error);
+      return null;
+    }
+    
+    if (data && data.length > 0) {
+      // Valid username found - cache it
+      usernameCache.set(username, data[0].user_id);
+      return data[0].user_id;
+    }
+    
+    // If not found in discord_users, try one more place - memory text
+    const { data: memoryData, error: memoryError } = await supabase
+      .from('unified_memories')
+      .select('user_id')
+      .or(`memory_text.ilike.%name is ${username}%,memory_text.ilike.%called ${username}%`)
+      .limit(1);
+      
+    if (memoryError || !memoryData || memoryData.length === 0) {
+      return null;
+    }
+    
+    // Found in memories - cache and return
+    usernameCache.set(username, memoryData[0].user_id);
+    return memoryData[0].user_id;
+  } catch (error) {
+    logger.error("Error in validateUsername:", error);
+    return null;
+  }
+}
+
 /**
  * Detects if a message is asking about another user and extracts the username.
+ * Includes validation to prevent false positives.
+ * 
  * @param {string} message - The user's message
- * @returns {object|null} - { username, query, category } if asking about another user, null otherwise
+ * @returns {Promise<object|null>} - { username, query, category } if asking about another user, null otherwise
  */
-export function detectUserQuery(message) {
-  // Common patterns for asking about other users
+export async function detectUserQuery(message) {
+  if (!message || typeof message !== 'string') return null;
+  
+  // More specific patterns for user queries with proper possessive context
   const patterns = [
-    // "Do you know what austin's favorite food is?"
-    /(?:do you know|tell me|what is|what's|who is|who's|how is|how's)\s+(?:what|who|how|if|about)?\s*(?:is\s+)?(\w+)(?:'s|\s+)(.+?)(?:\s+is)?(?:\?|$)/i,
+    // "What is austin's favorite food?" - Possessive form
+    /(?:what|who|how)\s+(?:is|are)\s+(\w+)['']s\s+(.+?)(?:\?|$)/i,
     
-    // "What is austin's favorite food?"
-    /(?:what|who|how)\s+(?:is|are)\s+(\w+)(?:'s|\s+)(.+?)(?:\?|$)/i,
+    // "Tell me about austin's hobbies" - Possessive form
+    /(?:tell me|do you know)\s+about\s+(\w+)['']s\s+(.+?)(?:\?|$)/i,
     
-    // "Tell me about austin's hobbies"
-    /(?:tell me|do you know)\s+(?:about\s+)?(\w+)(?:'s|\s+)(.+?)(?:\?|$)/i,
+    // "What do you know about austin?" - Direct about pattern
+    /(?:what|who|how|tell me|do you know)\s+(?:do you know\s+)?about\s+(\w+)(?:\?|$)/i,
     
-    // "What do you know about austin?"
-    /(?:what|who|how|tell me|do you know)\s+(?:do you know\s+)?(?:about\s+)?(\w+)(?:\?|$)/i
+    // Specific "do you remember" pattern
+    /do\s+you\s+(?:know|remember)\s+(\w+)(?:\?|$)/i,
+    
+    // User-specific commands
+    /^(?:user|profile|info|about):?\s+(\w+)(?:\s+(.+))?(?:\?|$)/i
   ];
   
+  // Try each pattern
   for (const pattern of patterns) {
     const match = message.match(pattern);
-    if (match) {
-      // Extract username and query
-      const username = match[1].toLowerCase();
-      // If we have a second capture group, use it as the query, otherwise use a general query
-      const query = match[2] ? match[2].toLowerCase() : "general information";
-      
+    if (!match) continue;
+    
+    // Extract potential username and query
+    const potentialUsername = match[1].toLowerCase();
+    const query = match[2] ? match[2].toLowerCase() : "general information";
+    
+    // Validate the username
+    const validUserId = await validateUsername(potentialUsername);
+    
+    // If username is valid, proceed
+    if (validUserId) {
       // Try to detect the category from the query
       const category = detectCategory(query);
       
-      return { username, query, category };
+      return { 
+        username: potentialUsername, 
+        query, 
+        category,
+        userId: validUserId  // Add the userId for convenience
+      };
+    }
+  }
+  
+  // Special case for asking explicitly with user: prefix
+  if (message.toLowerCase().startsWith('user:')) {
+    const parts = message.slice(5).trim().split(/\s+/, 2);
+    if (parts.length > 0) {
+      const potentialUsername = parts[0].toLowerCase();
+      const validUserId = await validateUsername(potentialUsername);
+      
+      if (validUserId) {
+        const query = parts.length > 1 ? parts[1] : "general information";
+        const category = detectCategory(query);
+        
+        return { 
+          username: potentialUsername, 
+          query, 
+          category,
+          userId: validUserId
+        };
+      }
     }
   }
   
