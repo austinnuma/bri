@@ -7,6 +7,7 @@ import { getEmbedding, embeddingCache } from './embeddings.js';
 import { personalityToString, userPersonalityPrefs } from './personality.js';
 import { logger } from './logger.js';
 
+
 // Initialize Supabase client using environment variables.
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
 
@@ -34,6 +35,29 @@ const MEMORY_CATEGORIES = {
   CONTACT: 'contact',
   OTHER: 'other'
 };
+
+/*
+// LRU cache for embeddings with max size
+export const embeddingCache = new LRU({
+  max: 1000, // Maximum items
+  maxAge: 1000 * 60 * 60 * 24 // Expire items after 24h
+});
+
+// Periodic cleanup for in-memory data
+function cleanupInactiveUsers() {
+  const now = Date.now();
+  const INACTIVE_THRESHOLD = 7 * 24 * 60 * 60 * 1000; // 7 days
+  
+  for (const [userId, lastActivity] of userLastActivity.entries()) {
+    if (now - lastActivity > INACTIVE_THRESHOLD) {
+      userConversations.delete(userId);
+      userContextLengths.delete(userId);
+      userDynamicPrompts.delete(userId);
+      logger.info(`Cleaned up inactive user: ${userId}`);
+    }
+  }
+}
+  **/
 
 /**
  * Categorizes a memory text by analyzing its content
