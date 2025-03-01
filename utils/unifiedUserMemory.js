@@ -10,6 +10,8 @@ import {
   MemoryCategories 
 } from './unifiedMemoryManager.js';
 
+
+/* 
 // Common English words that are often mistaken for usernames
 const COMMON_WORDS = new Set([
   // Time-related
@@ -38,17 +40,15 @@ const COMMON_WORDS = new Set([
  * Cache of known Discord usernames to avoid repeated DB queries
  * Format: { username: userId, ... }
  */
-const usernameCache = new Map();
+//const usernameCache = new Map();
 
 /**
  * Checks if a potential username is valid by checking against:
  * 1. Known Discord users in our database
  * 2. A list of common words that are unlikely to be usernames
- * 
- * @param {string} potentialUsername - The potential username to validate
- * @returns {Promise<string|null>} - The user ID if valid, null otherwise
- */
-async function validateUsername(potentialUsername) {
+// @param {string} potentialUsername - The potential username to validate
+ //@returns {Promise<string|null>} - The user ID if valid, null otherwise
+//async function validateUsername(potentialUsername) {
   if (!potentialUsername || potentialUsername.length < 2) return null;
   
   // Normalize to lowercase for all checks
@@ -110,9 +110,9 @@ async function validateUsername(potentialUsername) {
  * @param {string} message - The user's message
  * @returns {Promise<object|null>} - { username, query, category } if asking about another user, null otherwise
  */
-export async function detectUserQuery(message) {
-  if (!message || typeof message !== 'string') return null;
-  
+//export async function detectUserQuery(message) {
+ // if (!message || typeof message !== 'string') return null;
+ /* 
   // More specific patterns for user queries with proper possessive context
   const patterns = [
     // "What is austin's favorite food?" - Possessive form
@@ -186,6 +186,7 @@ export async function detectUserQuery(message) {
  * @param {string} query - The query text
  * @returns {string|null} - Category name or null
  */
+/* 
 function detectCategory(query) {
   const lowered = query.toLowerCase();
   
@@ -212,6 +213,7 @@ function detectCategory(query) {
  * @param {string} username - The username to search for
  * @returns {Promise<string|null>} - User ID or null if not found
  */
+/* 
 export async function findUserIdByName(username) {
   try {
     // Try to find from our database mapping
@@ -257,6 +259,7 @@ export async function findUserIdByName(username) {
  * @param {string} category - Optional category to filter by
  * @returns {Promise<string|null>} - Response or null if can't generate one
  */
+/* 
 export async function handleUserInfoQuery(askingUserId, targetUsername, query, category = null) {
   try {
     // Find the target user ID
@@ -302,6 +305,7 @@ Remember to maintain my 10-year-old girl personality when responding.
     return null;
   }
 }
+*/
 
 /**
  * Gets statistics about a user's memories

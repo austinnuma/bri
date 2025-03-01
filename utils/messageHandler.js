@@ -13,7 +13,7 @@ import { supabase } from '../services/supabaseService.js';
 import { logger } from './logger.js';
 import { extractIntuitedMemories } from './extraction.js';
 import { summarizeConversation } from './summarization.js';
-import { detectUserQuery, handleUserInfoQuery } from './unifiedUserMemory.js';
+//import { detectUserQuery, handleUserInfoQuery } from './unifiedUserMemory.js';
 import { analyzeImage } from '../services/visionService.js';
 
 const { userConversations, userContextLengths, userDynamicPrompts } = memoryManagerState;
@@ -133,7 +133,7 @@ export async function handleLegacyMessage(message) {
     }
     return;
   }
-
+/*
   // Check if this is a query about another user
   const userQuery = detectUserQuery(cleanedContent);
   if (userQuery) {
@@ -167,6 +167,7 @@ export async function handleLegacyMessage(message) {
       // Continue with normal processing
     }
   }
+*/
 
   // Handle regular text messages
   const effectiveSystemPrompt = getEffectiveSystemPrompt(message.author.id);
