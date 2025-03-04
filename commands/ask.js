@@ -3,6 +3,7 @@ import { SlashCommandBuilder } from '@discordjs/builders';
 import { openai, defaultAskModel } from '../services/openaiService.js';
 import { replaceEmoticons } from '../utils/textUtils.js';
 import { logger } from '../utils/logger.js';
+import { getCachedUser, invalidateUserCache } from '../utils/databaseCache.js';
 
 export const data = new SlashCommandBuilder()
   .setName('ask')
@@ -14,6 +15,8 @@ export const data = new SlashCommandBuilder()
 
 export async function execute(interaction) {
   try {
+    // Warm up cache for this user
+    await warmupUserCache(interaction.user.id);
     await interaction.deferReply();
     
     const userId = interaction.user.id;
@@ -30,10 +33,10 @@ export async function execute(interaction) {
     ];
     
     // Get completion from OpenAI
-    const completion = await openai.chat.completions.create({
+    const completion = await getChatCompletion({
       model: defaultAskModel,
       messages: messages,
-      max_tokens: 2000,
+      max_tokens: 3000,
     });
     
     // Process and send the response
@@ -46,4 +49,14 @@ export async function execute(interaction) {
     logger.error('Error executing ask command:', error);
     await interaction.editReply('Sorry, there was an error processing your question.');
   }
+
+  await supabase.from('user_conversations').upsert({
+    user_id: message.author.id,
+    conversation,
+    system_prompt: STATIC_CORE_PROMPT + "\n" + (userDynamicPrompts.get(message.author.id) || ""),
+    context_length: userContextLengths.get(message.author.id) || defaultContextLength,
+    updated_at: new Date().toISOString(),
+  });
+  // Add cache invalidation:
+  invalidateUserCache(interaction.user.id);
 }

@@ -1,6 +1,7 @@
 // services/openaiService.js
 import OpenAI from 'openai';
 import { logger } from '../utils/logger.js';
+import { createChatCompletion, createEmbedding } from '../utils/batchedOpenAI.js';
 
 // Initialize the OpenAI client
 export const openai = new OpenAI({
@@ -62,32 +63,52 @@ export function getEmbeddingModel() {
 }
 
 /**
- * Create a chat completion with error handling
- * @param {Object} params - Parameters for the completion
- * @returns {Promise<Object>} - The completion response
+ * Creates a chat completion using OpenAI's Chat Completion API with batching.
+ *
+ * @param {Object} options - Options for the chat completion.
+ * @param {string} [options.model=defaultAskModel] - The model to use.
+ * @param {Array<Object>} options.messages - Array of message objects { role, content }.
+ * @param {number} [options.max_tokens=1500] - Maximum tokens to generate.
+ * @returns {Promise<Object>} - The API response.
  */
-export async function createChatCompletion(params) {
+export async function getChatCompletion({ model = defaultAskModel, messages, max_tokens = 1500, ...otherOptions }) {
   try {
-    return await openai.chat.completions.create(params);
+    // Use the batched version for supported scenarios
+    return await createChatCompletion({
+      model,
+      messages,
+      max_tokens,
+      ...otherOptions
+    });
   } catch (error) {
-    logger.error('Error creating chat completion', { error, params });
+    logger.error("Error creating chat completion:", error);
     throw error;
   }
 }
 
 /**
- * Create an embedding with error handling
- * @param {Object} params - Parameters for the embedding
- * @returns {Promise<Object>} - The embedding response
+ * Retrieves an embedding vector for the given text with batching support.
+ *
+ * @param {Object} options - Options for the embedding request.
+ * @param {string|string[]} options.text - The text(s) to embed.
+ * @param {string} [options.model="text-embedding-ada-002"] - The embedding model to use.
+ * @returns {Promise<any>} - The embedding vector(s).
  */
-export async function createEmbedding(params) {
+export async function getEmbedding({ text, model = "text-embedding-ada-002" }) {
   try {
-    return await openai.embeddings.create({
-      model: _embeddingModel,
-      ...params
+    const response = await createEmbedding({
+      model,
+      input: text
     });
+    
+    // Format response to match original function
+    if (Array.isArray(text)) {
+      return response.data.map(item => item.embedding);
+    } else {
+      return response.data[0].embedding;
+    }
   } catch (error) {
-    logger.error('Error creating embedding', { error, params });
+    logger.error("Error creating embedding:", error);
     throw error;
   }
 }

@@ -8,6 +8,7 @@ import { logger } from './utils/logger.js';
 import { handleLegacyMessage } from './utils/messageHandler.js';
 import { createMemory, MemoryTypes, MemoryCategories } from './utils/unifiedMemoryManager.js';
 import { supabase } from './services/supabaseService.js';
+import { getCacheStats, getCachedUser, getCachedMemories } from './utils/databaseCache.js';
 
 // Get directory name in ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -51,9 +52,56 @@ for (const file of commandFiles) {
   }
 }
 
+// Set up a periodic cache maintenance function
+function setupCacheMaintenance() {
+  // Log cache stats every hour
+  setInterval(() => {
+    const stats = getCacheStats();
+    logger.info('Cache statistics:', stats);
+  }, 60 * 60 * 1000); // Every hour
+}
+setupCacheMaintenance();
+
+
+/**
+ * Warm up cache for active users
+ * Runs periodically to ensure frequently accessed caches are warm
+ */
+async function warmupActiveCaches() {
+  try {
+    // Get list of recently active users (last 24 hours)
+    const { data: activeUsers, error } = await supabase
+      .from('discord_users')
+      .select('user_id')
+      .gt('last_active', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
+      .limit(50); // Limit to most recent 50 users
+      
+    if (error) {
+      logger.error('Error fetching active users for cache warming:', error);
+      return;
+    }
+    
+    // Warm up cache for each active user
+    for (const user of activeUsers) {
+      await warmupUserCache(user.user_id);
+      // Small delay to avoid overloading the database
+      await new Promise(resolve => setTimeout(resolve, 100));
+    }
+    
+    logger.info(`Warmed up caches for ${activeUsers.length} active users`);
+  } catch (error) {
+    logger.error('Error in warmupActiveCaches:', error);
+  }
+}
+
+// Run every 2 hours
+setInterval(warmupActiveCaches, 2 * 60 * 60 * 1000);
+
+
 // ================ Memory Maintenance ================
 // Set up periodic memory maintenance
 const MEMORY_MAINTENANCE_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
+
 
 /**
  * Helper function to categorize memory text
@@ -211,6 +259,14 @@ client.once('ready', () => {
 // Handle slash command interactions
 client.on('interactionCreate', async interaction => {
   if (!interaction.isCommand()) return;
+
+  // Warm up cache for this user
+  try {
+    await warmupUserCache(interaction.user.id);
+  } catch (error) {
+    // Don't block command execution if warmup fails
+    logger.error('Error warming up cache:', error);
+  }
   
   const command = client.commands.get(interaction.commandName);
   if (!command) return;

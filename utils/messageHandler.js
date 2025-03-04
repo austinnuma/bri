@@ -8,18 +8,23 @@ import {
   insertIntuitedMemory 
 } from './unifiedMemoryManager.js';
 import { splitMessage, replaceEmoticons } from './textUtils.js';
-import { openai, defaultAskModel } from '../services/openaiService.js';
+import { openai, getChatCompletion, defaultAskModel } from '../services/openaiService.js';
 import { supabase } from '../services/supabaseService.js';
 import { logger } from './logger.js';
 import { extractIntuitedMemories } from './extraction.js';
 import { summarizeConversation } from './summarization.js';
 //import { detectUserQuery, handleUserInfoQuery } from './unifiedUserMemory.js';
 import { analyzeImage } from '../services/visionService.js';
+import { getBatchEmbeddings } from './improvedEmbeddings.js';
+import { getCachedUser, invalidateUserCache, warmupUserCache } from '../utils/databaseCache.js';
 
 const { userConversations, userContextLengths, userDynamicPrompts } = memoryManagerState;
 
 const SUMMARY_THRESHOLD = 3;
 const INACTIVITY_THRESHOLD = 8 * 60 * 60 * 1000; // 8 hours
+
+// Track user activity times
+const userLastActive = new Map();
 
 // We'll store the last summary timestamp per user in memory.
 const lastSummaryTimestamps = new Map();
@@ -49,6 +54,15 @@ function isImageAttachment(attachment) {
  */
 export async function handleLegacyMessage(message) {
   if (message.author.bot) return;
+  const lastInteraction = userLastActive.get(message.author.id) || 0;
+  const now = Date.now();
+  // If user was inactive for more than 10 minutes, refresh their cache
+  if (now - lastInteraction > 10 * 60 * 1000) {
+    await warmupUserCache(message.author.id);
+  }
+
+  // Update last active timestamp
+  userLastActive.set(message.author.id, now);
 
   ///logger.info(`Processing message: "${message.content}", attachments: ${message.attachments.size}`);
 
@@ -188,7 +202,8 @@ export async function handleLegacyMessage(message) {
   await message.channel.sendTyping();
 
   try {
-    const completion = await openai.chat.completions.create({
+    // Use our batched version instead of direct API call
+    const completion = await getChatCompletion({
       model: defaultAskModel,
       messages: conversation,
       max_tokens: 3000,
@@ -205,6 +220,7 @@ export async function handleLegacyMessage(message) {
       context_length: userContextLengths.get(message.author.id) || defaultContextLength,
       updated_at: new Date().toISOString(),
     });
+    invalidateUserCache(message.author.id);
 
     // Update username mapping if needed
     updateUserMapping(message).catch(err => {
@@ -306,8 +322,43 @@ async function summarizeAndExtract(userId, conversation) {
     
     // Insert memories with medium-high confidence
     logger.info(`Extracted ${extractedFacts.length} new memories for user ${userId}`);
-    for (const fact of extractedFacts) {
-      await insertIntuitedMemory(userId, fact, 0.8);
+    // Process all facts as a batch
+    const memoryObjects = extractedFacts.map(fact => ({
+      user_id: userId,
+      memory_text: fact,
+      memory_type: 'intuited',
+      category: categorizeMemory(fact),
+      confidence: 0.8,
+      source: 'conversation_extraction'
+    }));
+    
+    // Get all embeddings in a single batch
+    const texts = extractedFacts;
+    const embeddings = await getBatchEmbeddings(texts);
+    
+    // Add embeddings to memory objects
+    for (let i = 0; i < memoryObjects.length; i++) {
+      memoryObjects[i].embedding = embeddings[i];
+    }
+    // Insert all memories in a single database operation if possible
+    try {
+      const { data, error } = await supabase
+        .from('unified_memories')
+        .insert(memoryObjects);
+        
+      if (error) {
+        logger.error("Error batch inserting memories:", error);
+        // Fall back to individual inserts if batch fails
+        for (const fact of extractedFacts) {
+          await insertIntuitedMemory(userId, fact);
+        }
+      }
+    } catch (batchError) {
+      logger.error("Error in batch memory insertion:", batchError);
+      // Fall back to individual inserts
+      for (const fact of extractedFacts) {
+        await insertIntuitedMemory(userId, fact);
+      }
     }
   } catch (error) {
     logger.error(`Error in background summarization process: ${error}`);

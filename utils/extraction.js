@@ -74,6 +74,15 @@ SUMMARY: ${summaryText}`;
       return [];
     }
     
+    if (extractedFacts.length > 0) {
+      await batchCreateMemories(userId, extractedFacts.map(fact => ({
+        text: fact,
+        type: MemoryTypes.INTUITED,
+        confidence: 0.8,
+        source: 'extraction'
+      })));
+    }
+
     // Deduplicate against existing memories
     const deduplicatedFacts = await deduplicateAgainstExisting(extractedFacts, userId);
     

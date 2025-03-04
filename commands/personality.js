@@ -1,6 +1,6 @@
 import { SlashCommandBuilder } from '@discordjs/builders';
 import { logger } from '../utils/logger.js';
-import { setUserPersonality, getUserPersonality } from '../utils/personality.js';
+import { setPersonalityPreference, getPersonality } from '../utils/personality.js';
 
 export const data = new SlashCommandBuilder()
   .setName('personality')
@@ -40,7 +40,7 @@ export async function execute(interaction) {
     const userId = interaction.user.id;
     
     // Get current settings
-    const currentSettings = getUserPersonality(userId);
+    const currentSettings = getPersonality(userId);
     
     // Get new settings from options
     const verbosity = interaction.options.getInteger('verbosity');
@@ -63,7 +63,7 @@ export async function execute(interaction) {
     };
     
     // Save settings
-    setUserPersonality(userId, updatedSettings);
+    setPersonalityPreference(userId, updatedSettings);
     
     // Confirm changes
     const reply = `I've updated how I'll respond to you!\n\n${formatCurrentSettings(updatedSettings)}`;

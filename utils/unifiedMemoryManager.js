@@ -3,9 +3,14 @@ import { createClient } from '@supabase/supabase-js';
 import natural from 'natural';
 import { openai } from '../services/openaiService.js';
 import { normalizeText } from './normalize.js';
-import { getEmbedding, embeddingCache } from './embeddings.js';
+//import { getEmbedding, embeddingCache } from './embeddings.js';
 import { personalityToString, userPersonalityPrefs } from './personality.js';
 import { logger } from './logger.js';
+import { getEmbedding } from './improvedEmbeddings.js';
+// Import the caching function
+import { cachedQuery, getCachedMemories } from '../utils/databaseCache.js';
+import { cachedVectorSearch } from '../utils/databaseCache.js';
+
 
 
 // Initialize Supabase client using environment variables.
@@ -36,28 +41,6 @@ const MEMORY_CATEGORIES = {
   OTHER: 'other'
 };
 
-/*
-// LRU cache for embeddings with max size
-export const embeddingCache = new LRU({
-  max: 1000, // Maximum items
-  maxAge: 1000 * 60 * 60 * 24 // Expire items after 24h
-});
-
-// Periodic cleanup for in-memory data
-function cleanupInactiveUsers() {
-  const now = Date.now();
-  const INACTIVE_THRESHOLD = 7 * 24 * 60 * 60 * 1000; // 7 days
-  
-  for (const [userId, lastActivity] of userLastActivity.entries()) {
-    if (now - lastActivity > INACTIVE_THRESHOLD) {
-      userConversations.delete(userId);
-      userContextLengths.delete(userId);
-      userDynamicPrompts.delete(userId);
-      logger.info(`Cleaned up inactive user: ${userId}`);
-    }
-  }
-}
-  **/
 
 /**
  * Categorizes a memory text by analyzing its content
@@ -322,36 +305,29 @@ export async function insertIntuitedMemory(userId, memoryText, confidence = 0.8)
  */
 export async function retrieveRelevantMemories(userId, query, limit = 5, memoryType = null, category = null) {
   try {
+    // Get embedding for query
     const embedding = await getEmbedding(query);
-    const RECALL_THRESHOLD = 0.6;
     
-    // Use the RPC function to find relevant memories
-    const { data, error } = await supabase.rpc('match_unified_memories', {
-      p_user_id: userId,
-      p_query_embedding: embedding,
-      p_match_threshold: RECALL_THRESHOLD,
-      p_match_count: limit,
-      p_memory_type: memoryType,
-      p_category: category
+    // Use the specialized function for vector search
+    const matches = await cachedVectorSearch(userId, embedding, {
+      threshold: 0.6,
+      limit,
+      memoryType,
+      category
     });
     
-    if (error) {
-      logger.error("Error retrieving memories", { error });
-      return "";
-    }
-    
-    if (!data || data.length === 0) {
+    if (!matches || matches.length === 0) {
       return "";
     }
     
     // Sort by confidence * distance to get most reliable and relevant memories first
-    const sortedData = [...data].sort((a, b) => 
+    const sortedData = [...matches].sort((a, b) => 
       (b.confidence * b.distance) - (a.confidence * a.distance)
     );
     
     // Format memories, adding confidence indicator for intuited memories
     const formattedMemories = sortedData.map(memory => {
-      if (memory.memory_type === MEMORY_TYPES.INTUITED && memory.confidence < 0.9) {
+      if (memory.memory_type === 'intuited' && memory.confidence < 0.9) {
         // For lower confidence intuited memories, add an indicator
         return `${memory.memory_text} (I think)`;
       }
@@ -360,7 +336,8 @@ export async function retrieveRelevantMemories(userId, query, limit = 5, memoryT
     
     return formattedMemories.join("\n");
   } catch (error) {
-    logger.error("Error in retrieveRelevantMemories", { error });
+    // Make sure to capture and log the full error
+    logger.error("Error in retrieveRelevantMemories:", error, error.stack);
     return "";
   }
 }
@@ -418,30 +395,27 @@ export async function clearAllMemories(userId) {
  */
 export async function getAllMemories(userId, memoryType = null, category = null) {
   try {
-    let query = supabase
-      .from('unified_memories')
-      .select('*')
-      .eq('user_id', userId)
-      .order('created_at', { ascending: false });
-      
+    const filters = {};
+    
     if (memoryType) {
-      query = query.eq('memory_type', memoryType);
+      filters.type = memoryType;
     }
     
     if (category) {
-      query = query.eq('category', category);
+      filters.category = category;
     }
     
-    const { data, error } = await query;
+    // Set default to active memories only
+    filters.active = true;
     
-    if (error) {
-      logger.error("Error fetching memories", { error });
-      return [];
-    }
+    // Order by confidence descending
+    filters.orderBy = 'confidence';
+    filters.ascending = false;
     
-    return data || [];
+    // Use cached function
+    return await getCachedMemories(userId, filters);
   } catch (error) {
-    logger.error("Error in getAllMemories", { error });
+    logger.error("Error in getAllMemories:", error);
     return [];
   }
 }
