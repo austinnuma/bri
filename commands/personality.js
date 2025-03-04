@@ -1,6 +1,6 @@
 import { SlashCommandBuilder } from '@discordjs/builders';
 import { logger } from '../utils/logger.js';
-import { setPersonalityPreference, getPersonality } from '../utils/personality.js';
+import { setPersonalityPreference, getPersonality } from '../utils/unifiedMemoryManager.js';
 
 export const data = new SlashCommandBuilder()
   .setName('personality')

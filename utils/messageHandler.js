@@ -5,14 +5,14 @@ import {
   memoryManagerState, 
   defaultContextLength, 
   STATIC_CORE_PROMPT,
-  insertIntuitedMemory 
+  insertIntuitedMemory,
+  categorizeMemory 
 } from './unifiedMemoryManager.js';
 import { splitMessage, replaceEmoticons } from './textUtils.js';
 import { openai, getChatCompletion, defaultAskModel, supabase } from '../services/combinedServices.js';
 import { logger } from './logger.js';
 import { extractIntuitedMemories } from './extractionAndMemory.js';
 import { summarizeConversation } from './summarization.js';
-//import { detectUserQuery, handleUserInfoQuery } from './unifiedUserMemory.js';
 import { analyzeImage } from '../services/visionService.js';
 import { getBatchEmbeddings } from './improvedEmbeddings.js';
 import { getCachedUser, invalidateUserCache, warmupUserCache } from '../utils/databaseCache.js';

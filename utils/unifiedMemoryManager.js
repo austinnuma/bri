@@ -4,7 +4,7 @@ import natural from 'natural';
 import { openai } from '../services/combinedServices.js';
 import { normalizeText } from './textUtils.js';
 //import { getEmbedding, embeddingCache } from './embeddings.js';
-import { personalityToString, userPersonalityPrefs } from './personality.js';
+//import { personalityToString, userPersonalityPrefs } from './personality.js';
 import { logger } from './logger.js';
 import { getEmbedding } from './improvedEmbeddings.js';
 // Import the caching function
@@ -15,6 +15,9 @@ import { cachedVectorSearch } from '../utils/databaseCache.js';
 
 // Initialize Supabase client using environment variables.
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY);
+
+// In-memory cache for personality preferences per user.
+export const userPersonalityPrefs = new Map();
 
 // In-memory maps for per-user state.
 const userDynamicPrompts = new Map();
@@ -47,7 +50,7 @@ const MEMORY_CATEGORIES = {
  * @param {string} text - The memory text to categorize
  * @returns {string} - The category name
  */
-function categorizeMemory(text) {
+export function categorizeMemory(text) {
   const lowered = text.toLowerCase();
   
   const categories = [
@@ -419,6 +422,99 @@ export async function getAllMemories(userId, memoryType = null, category = null)
     return [];
   }
 }
+
+
+/**
+ * ---------------------------------------------------------------  
+ * ---------------------------------------------------------------
+ * ---------------------------------------------------------------
+ *                 Personality Section
+ * ---------------------------------------------------------------
+ * ---------------------------------------------------------------
+ * ---------------------------------------------------------------
+ */
+
+export const defaultPersonality = {
+  responseLength: "normal", // Options: "short", "normal", "long"
+  humor: "light",          // Options: "none", "light", "more humorous"
+  tone: "friendly",        // Options: "friendly", "formal", "casual", etc.
+};
+
+
+
+/**
+ * Retrieves the personality preferences for a given user.
+ * If not cached, attempts to load from Supabase.
+ * @param {string} userId 
+ * @returns {Promise<Object>} Personality object.
+ */
+export async function getPersonality(userId) {
+  if (userPersonalityPrefs.has(userId)) {
+    return userPersonalityPrefs.get(userId);
+  }
+  // Attempt to load from Supabase.
+  const { data, error } = await supabase
+    .from('user_conversations')
+    .select('personality_preferences')
+    .eq('user_id', userId)
+    .single();
+
+  if (error) {
+    console.error("Error fetching personality preferences:", error);
+    // Fall back to default if an error occurs.
+    userPersonalityPrefs.set(userId, defaultPersonality);
+    return defaultPersonality;
+  }
+  
+  let personality = data?.personality_preferences;
+  if (!personality) {
+    personality = defaultPersonality;
+  }
+  userPersonalityPrefs.set(userId, personality);
+  return personality;
+}
+
+/**
+ * Updates a specific personality field for a user.
+ * @param {string} userId 
+ * @param {string} field - One of "responseLength", "humor", or "tone".
+ * @param {string} value - The new value for the field.
+ * @returns {Promise<Object>} The updated personality object.
+ */
+export async function setPersonalityPreference(userId, field, value) {
+  let personality = await getPersonality(userId);
+  personality = { ...personality, [field]: value };
+  userPersonalityPrefs.set(userId, personality);
+
+  // Upsert the personality preferences in the Supabase record.
+  const { error } = await supabase.from('user_conversations').upsert({
+    user_id: userId,
+    personality_preferences: personality,
+    updated_at: new Date().toISOString(),
+  });
+  if (error) {
+    console.error("Error updating personality preferences:", error);
+    throw error;
+  }
+  return personality;
+}
+
+/**
+ * Converts a personality object into a formatted string.
+ * This string will be appended to the system prompt.
+ * @param {Object} personality 
+ * @returns {string} Formatted personality section.
+ */
+export function personalityToString(personality) {
+  if (!personality) return "";
+  const { responseLength, humor, tone } = personality;
+  let personalityStr = "Personality Preferences:";
+  if (responseLength) personalityStr += `\n- Response Length: ${responseLength}`;
+  if (humor) personalityStr += `\n- Humor: ${humor}`;
+  if (tone) personalityStr += `\n- Tone: ${tone}`;
+  return personalityStr;
+}
+
 
 // Expose internal state maps for use elsewhere if necessary
 export const memoryManagerState = {
