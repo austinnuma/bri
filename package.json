@@ -8,8 +8,10 @@
     "@supabase/supabase-js": "^2.48.1",
     "discord.js": "^14.x",
     "dotenv": "^16.x",
+    "ffmpeg": "^0.0.4",
     "natural": "^8.0.1",
     "openai": "^4.x",
-    "winston": "^3.17.0"
+    "winston": "^3.17.0",
+    "ytdl-core": "^4.11.5"
   }
 }

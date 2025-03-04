@@ -1,7 +1,7 @@
 // optimizedDatabase.js - Optimized database access patterns
 import { supabase } from './supabaseService.js';
 import { logger } from '../utils/logger.js';
-//import LRU from 'lru-cache';
+import LRU from 'lru-cache';
 
 // Cache for database queries
 const queryCache = new LRU({
