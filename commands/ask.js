@@ -1,6 +1,6 @@
 import { getEffectiveSystemPrompt, getCombinedSystemPromptWithMemories } from '../utils/unifiedMemoryManager.js';
 import { SlashCommandBuilder } from '@discordjs/builders';
-import { openai, defaultAskModel } from '../services/openaiService.js';
+import { openai, defaultAskModel } from '../services/combinedServices.js';
 import { replaceEmoticons } from '../utils/textUtils.js';
 import { logger } from '../utils/logger.js';
 import { getCachedUser, invalidateUserCache } from '../utils/databaseCache.js';

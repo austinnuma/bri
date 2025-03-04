@@ -1,5 +1,5 @@
 import { SlashCommandBuilder } from '@discordjs/builders';
-import { openai, setDefaultAskModel } from '../services/openaiService.js';
+import { openai, setDefaultAskModel } from '../services/combinedServices.js';
 import { logger } from '../utils/logger.js';
 
 export const data = new SlashCommandBuilder()

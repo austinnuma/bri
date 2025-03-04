@@ -1,6 +1,6 @@
 import { SlashCommandBuilder } from '@discordjs/builders';
 import { EmbedBuilder } from 'discord.js';
-import { fetchGeminiResponse } from '../services/geminiService.js';
+import { fetchGeminiResponse } from '../services/combinedServices.js';
 import { logger } from '../utils/logger.js';
 import { splitMessage } from '../utils/textUtils.js';
 

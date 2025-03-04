@@ -1,5 +1,5 @@
 // batchedOpenAI.js - Batched OpenAI API service
-import { openai } from '../services/openaiService.js';
+import { openai } from '../services/combinedServices.js';
 import { logger } from './logger.js';
 
 // Batch queue configuration

@@ -1,5 +1,5 @@
 // services/visionService.js
-import { openai } from './openaiService.js';
+import { openai } from './combinedServices.js';
 import { logger } from '../utils/logger.js';
 
 /**

@@ -1,6 +1,6 @@
 // improvedEmbeddings.js - Simplified embedding optimization
-import { openai } from '../services/openaiService.js';
-import { normalizeText } from './normalize.js';
+import { openai } from '../services/combinedServices.js';
+import { normalizeText } from './textUtils.js';
 import { logger } from './logger.js';
 
 // Simple cache with size limit

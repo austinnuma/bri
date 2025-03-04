@@ -1,6 +1,6 @@
 import { SlashCommandBuilder } from '@discordjs/builders';
 import { logger } from '../utils/logger.js';
-import { supabase } from '../services/supabaseService.js';
+import { supabase } from '../services/combinedServices.js';
 import { memoryManagerState } from '../utils/unifiedMemoryManager.js';
 
 export const data = new SlashCommandBuilder()

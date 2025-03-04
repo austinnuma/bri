@@ -1,4 +1,4 @@
-import { supabase } from '../services/supabaseService.js';
+import { supabase } from '../services/combinedServices.js';
 
 export const defaultPersonality = {
   responseLength: "normal", // Options: "short", "normal", "long"

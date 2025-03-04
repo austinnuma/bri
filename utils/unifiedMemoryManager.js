@@ -1,8 +1,8 @@
 // New unified memory manager that uses the single table approach
 import { createClient } from '@supabase/supabase-js';
 import natural from 'natural';
-import { openai } from '../services/openaiService.js';
-import { normalizeText } from './normalize.js';
+import { openai } from '../services/combinedServices.js';
+import { normalizeText } from './textUtils.js';
 //import { getEmbedding, embeddingCache } from './embeddings.js';
 import { personalityToString, userPersonalityPrefs } from './personality.js';
 import { logger } from './logger.js';

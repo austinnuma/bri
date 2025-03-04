@@ -1,9 +1,7 @@
 
-import { openai, defaultAskModel } from '../services/openaiService.js';
-import { supabase } from '../services/supabaseService.js';
+import { openai, defaultAskModel, supabase } from '../services/combinedServices.js';
 import { logger } from './logger.js';
-import { replaceEmoticons } from './textUtils.js';
-import { stripCodeBlock } from './textUtils.js';
+import { replaceEmoticons, stripCodeBlock, normalizeText } from './textUtils.js';
 import natural from 'natural';
 import { 
   getEffectiveSystemPrompt, 
@@ -11,7 +9,6 @@ import {
   MemoryTypes, 
   MemoryCategories 
 } from './unifiedMemoryManager.js';
-import { normalizeText } from './normalize.js';
 
 // // Custom error classes for more specific error handling
 // class UserMemoryError extends Error {

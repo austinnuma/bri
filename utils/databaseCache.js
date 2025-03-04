@@ -1,5 +1,5 @@
 // databaseCache.js - Simple database caching system
-import { supabase } from '../services/supabaseService.js';
+import { supabase } from '../services/combinedServices.js';
 import { logger } from './logger.js';
 
 const QUERY_TIMEOUT = 5000; // 5 second timeout for database queries

@@ -8,8 +8,7 @@ import {
   insertIntuitedMemory 
 } from './unifiedMemoryManager.js';
 import { splitMessage, replaceEmoticons } from './textUtils.js';
-import { openai, getChatCompletion, defaultAskModel } from '../services/openaiService.js';
-import { supabase } from '../services/supabaseService.js';
+import { openai, getChatCompletion, defaultAskModel, supabase } from '../services/combinedServices.js';
 import { logger } from './logger.js';
 import { extractIntuitedMemories } from './extractionAndMemory.js';
 import { summarizeConversation } from './summarization.js';

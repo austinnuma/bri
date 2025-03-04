@@ -7,7 +7,7 @@ import { fileURLToPath } from 'url';
 import { logger } from './utils/logger.js';
 import { handleLegacyMessage } from './utils/messageHandler.js';
 import { createMemory, MemoryTypes, MemoryCategories } from './utils/unifiedMemoryManager.js';
-import { supabase } from './services/supabaseService.js';
+import { supabase } from './services/combinedServices.js';
 import { getCacheStats, getCachedUser, getCachedMemories } from './utils/databaseCache.js';
 
 // Get directory name in ESM
