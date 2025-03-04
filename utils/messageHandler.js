@@ -13,7 +13,7 @@ import { openai, getChatCompletion, defaultAskModel, supabase } from '../service
 import { logger } from './logger.js';
 import { extractIntuitedMemories } from './extractionAndMemory.js';
 import { summarizeConversation } from './summarization.js';
-import { analyzeImage } from '../services/visionService.js';
+import { analyzeImage, analyzeImages } from '../services/visionService.js';
 import { getBatchEmbeddings } from './improvedEmbeddings.js';
 import { getCachedUser, invalidateUserCache, warmupUserCache } from '../utils/databaseCache.js';
 
@@ -30,6 +30,7 @@ const lastSummaryTimestamps = new Map();
 // Track new messages since last extraction
 const userMessageCounters = new Map();
 
+
 /**
  * Checks if an attachment is an image
  */
@@ -40,10 +41,86 @@ function isImageAttachment(attachment) {
   
   // Check content type if available
   const hasImageContentType = attachment.contentType && 
-                              attachment.contentType.startsWith('image/');
+                            attachment.contentType.startsWith('image/');
   
   return isImage || hasImageContentType;
 }
+
+
+async function handleImageAttachments(message, cleanedContent) {
+  // Extract all image attachments
+  const imageAttachments = message.attachments.filter(isImageAttachment);
+  
+  if (imageAttachments.size === 0) {
+    return false; // No images to process
+  }
+  
+  logger.info(`Processing ${imageAttachments.size} images from user ${message.author.id}`);
+  await message.channel.sendTyping();
+  
+  try {
+    // Get all image URLs
+    const imageUrls = imageAttachments.map(attachment => attachment.url);
+    
+    // Get conversation history for this user to provide context
+    const conversationHistory = userConversations.get(message.author.id) || [];
+    
+    // Use the enhanced analyzeImages function with conversation context
+    const imageDescription = await analyzeImages(
+      imageUrls,
+      cleanedContent || "",
+      conversationHistory
+    );
+    
+    // Send the response
+    const response = await message.reply(imageDescription);
+    
+    // Update conversation history with this interaction
+    if (conversationHistory.length > 0) {
+      // First add the user's message with images
+      conversationHistory.push({ 
+        role: "user", 
+        content: cleanedContent 
+          ? `${cleanedContent} [Attached ${imageUrls.length} image(s)]` 
+          : `[Attached ${imageUrls.length} image(s)]` 
+      });
+      
+      // Then add Bri's response
+      conversationHistory.push({ 
+        role: "assistant", 
+        content: imageDescription 
+      });
+      
+      // Apply context length limits if needed
+      const contextLength = userContextLengths.get(message.author.id) || defaultContextLength;
+      if (conversationHistory.length > contextLength) {
+        conversationHistory = [conversationHistory[0], ...conversationHistory.slice(-(contextLength - 1))];
+      }
+      
+      // Save the updated conversation
+      userConversations.set(message.author.id, conversationHistory);
+      
+      // Save to database
+      await supabase.from('user_conversations').upsert({
+        user_id: message.author.id,
+        conversation: conversationHistory,
+        system_prompt: STATIC_CORE_PROMPT + "\n" + (userDynamicPrompts.get(message.author.id) || ""),
+        context_length: userContextLengths.get(message.author.id) || defaultContextLength,
+        updated_at: new Date().toISOString(),
+      });
+      
+      invalidateUserCache(message.author.id);
+    }
+    
+    logger.info(`Successfully processed images for user ${message.author.id}`);
+    return true; // Images were processed
+  } catch (error) {
+    logger.error("Error processing images:", error);
+    await message.reply("I had trouble understanding those images. Can you try sending them again?");
+    return true; // Error, but still handled the images
+  }
+}
+
 
 /**
  * Handles legacy (non-slash) messages.
@@ -68,69 +145,41 @@ export async function handleLegacyMessage(message) {
   const isDesignated = (message.channel.id === process.env.CHANNEL_ID);
   let cleanedContent = message.content;
   
-  // Check for attached images
-  const imageAttachments = message.attachments.filter(isImageAttachment);
-  //logger.info(`Found ${imageAttachments.size} image attachments`);
+    // Check for attached images and store the result
+    const imageAttachments = message.attachments.filter(isImageAttachment);
+    //logger.info(`Found ${imageAttachments.size} image attachments`);
+    
+    // Check if this is a non-designated channel
+    if (!isDesignated) {
+      const prefixRegex = /^(hey\s+)?bri+\b/i;
+      
+      // Check if this is a reply to the bot's message
+      const isReplyToBot = message.reference && 
+                           message.reference.messageId && 
+                           (await message.channel.messages.fetch(message.reference.messageId))?.author.id === message.client.user.id;
+      
+      // Only proceed in three cases:
+      // 1. Message has the "bri" prefix, or
+      // 2. Message is a direct reply to the bot, or
+      // 3. Message has BOTH an image AND the "bri" prefix
+      const hasBriPrefix = prefixRegex.test(message.content);
+      const hasImageWithBri = imageAttachments.size > 0 && hasBriPrefix;
+      
+      if (!hasBriPrefix && !isReplyToBot && !hasImageWithBri) {
+        return; // Skip this message
+      }
+      
+      // Clean the content if it has the prefix
+      if (hasBriPrefix) {
+        cleanedContent = message.content.replace(prefixRegex, '').trim();
+      }
+    }
   
-  // Check if this is a non-designated channel
-  if (!isDesignated) {
-    const prefixRegex = /^(hey\s+)?bri+\b/i;
-    
-    // Check if this is a reply to the bot's message
-    const isReplyToBot = message.reference && 
-                         message.reference.messageId && 
-                         (await message.channel.messages.fetch(message.reference.messageId))?.author.id === message.client.user.id;
-    
-    // Only proceed in three cases:
-    // 1. Message has the "bri" prefix, or
-    // 2. Message is a direct reply to the bot, or
-    // 3. Message has BOTH an image AND the "bri" prefix
-    const hasBriPrefix = prefixRegex.test(message.content);
-    const hasImageWithBri = imageAttachments.size > 0 && hasBriPrefix;
-    
-    if (!hasBriPrefix && !isReplyToBot && !hasImageWithBri) {
-      return; // Skip this message
+    // Handle image analysis using our new function
+    const imagesHandled = await handleImageAttachments(message, cleanedContent);
+    if (imagesHandled) {
+      return; // Exit early if we handled images
     }
-    
-    // Clean the content if it has the prefix
-    if (hasBriPrefix) {
-      cleanedContent = message.content.replace(prefixRegex, '').trim();
-    }
-  }
-
-  // Handle image analysis if there are image attachments
-  if (imageAttachments.size > 0) {
-    logger.info(`Processing ${imageAttachments.size} images`);
-    await message.channel.sendTyping();
-    
-    try {
-      // Get the first image for analysis
-      const imageAttachment = imageAttachments.first();
-      const imageUrl = imageAttachment.url;
-      
-      logger.info(`Analyzing image from user ${message.author.id}: ${imageUrl}`);
-      
-      // Use an empty string if no content was provided with the image
-      const contextText = cleanedContent || "";
-      logger.info(`Image context text: "${contextText}"`);
-      
-      // Analyze the image with any available context
-      const imageDescription = await analyzeImage(imageUrl, contextText);
-      
-      // Reply with the image description
-      await message.reply(imageDescription);
-      
-      // Log the successful image analysis
-      logger.info(`Successfully analyzed image for user ${message.author.id}`);
-      
-      // Return early - we don't need to process this as a normal message
-      return;
-    } catch (error) {
-      logger.error("Error processing image:", error);
-      await message.reply("I had trouble understanding that image. Can you try a different one?");
-      return;
-    }
-  }
 
   // Memory command check
   const memoryRegex = /^(?:can you\s+)?remember\s+(.*)/i;
@@ -146,41 +195,7 @@ export async function handleLegacyMessage(message) {
     }
     return;
   }
-/*
-  // Check if this is a query about another user
-  const userQuery = detectUserQuery(cleanedContent);
-  if (userQuery) {
-    try {
-      logger.info(`User ${message.author.id} asked about ${userQuery.username}'s ${userQuery.query}`);
-      
-      // Send typing indicator while processing
-      await message.channel.sendTyping();
-      
-      const response = await handleUserInfoQuery(
-        message.author.id, 
-        userQuery.username, 
-        userQuery.query,
-        userQuery.category
-      );
-      
-      if (response) {
-        if (response.length > 2000) {
-          const chunks = splitMessage(response, 2000);
-          for (const chunk of chunks) {
-            await message.channel.send(chunk);
-          }
-        } else {
-          await message.reply(response);
-        }
-        return; // Exit early, we've handled the query
-      }
-      // If no response, continue with normal processing
-    } catch (error) {
-      logger.error("Error handling user info query", { error, query: userQuery });
-      // Continue with normal processing
-    }
-  }
-*/
+
 
   // Handle regular text messages
   const effectiveSystemPrompt = getEffectiveSystemPrompt(message.author.id);
