@@ -52,6 +52,10 @@ const stemmer = natural.PorterStemmer;
  * @returns {string} - The normalized text.
  */
 export function normalizeText(text) {
+  // Add a check for undefined or null text
+  if (!text) {
+    return ''; // Return empty string for undefined/null input
+  }
   const lowerText = text.toLowerCase().trim();
   const tokens = tokenizer.tokenize(lowerText);
   const stemmedTokens = tokens.map(token => stemmer.stem(token));
