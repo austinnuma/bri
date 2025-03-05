@@ -10,6 +10,8 @@ import { createMemory, MemoryTypes, MemoryCategories } from './utils/unifiedMemo
 import { supabase } from './services/combinedServices.js';
 import { getCacheStats, getCachedUser, getCachedMemories, warmupUserCache } from './utils/databaseCache.js';
 import { ensureQuoteTableExists } from './utils/quoteManager.js';
+import { handleReactionAdd } from './utils/reactionHandler.js';
+
 
 // Get directory name in ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -21,6 +23,8 @@ const client = new Client({
     GatewayIntentBits.Guilds,
     GatewayIntentBits.GuildMessages,
     GatewayIntentBits.MessageContent,
+    GatewayIntentBits.GuildMembers,
+    GatewayIntentBits.GuildMessageReactions
   ],
 });
 
@@ -50,6 +54,27 @@ for (const file of commandFiles) {
     }
   } catch (error) {
     logger.error(`Error loading command from ${file}:`, error);
+  }
+}
+
+// Load Context Menu Commands
+const contextMenusPath = path.join(commandsPath, 'contextMenus');
+if (fs.existsSync(contextMenusPath)) {
+  const contextMenuFiles = fs.readdirSync(contextMenusPath).filter(file => file.endsWith('.js'));
+  
+  for (const file of contextMenuFiles) {
+    try {
+      const filePath = path.join(contextMenusPath, file);
+      const contextMenu = await import(`file://${filePath}`);
+      
+      if ('data' in contextMenu && 'execute' in contextMenu) {
+        commands.push(contextMenu.data.toJSON());
+        client.commands.set(contextMenu.data.name, contextMenu);
+        logger.info(`Loaded context menu command: ${contextMenu.data.name}`);
+      }
+    } catch (error) {
+      logger.error(`Error loading context menu from ${file}:`, error);
+    }
   }
 }
 
@@ -227,6 +252,8 @@ runMemoryMaintenance().catch(err => {
 // Set up periodic maintenance
 setInterval(runMemoryMaintenance, MEMORY_MAINTENANCE_INTERVAL);
 
+
+
 // ================ Bot Setup and Event Handlers ================
 
 // When the client is ready, run this code (only once)
@@ -276,6 +303,19 @@ client.on('interactionCreate', async interaction => {
   }
   
   const command = client.commands.get(interaction.commandName);
+
+  if (interaction.isContextMenuCommand()) {
+    const command = client.commands.get(interaction.commandName);
+    if (!command) return;
+    
+    try {
+      await command.execute(interaction);
+    } catch (error) {
+      logger.error(`Error executing context menu ${interaction.commandName}:`, error);
+      // Error handling
+    }
+  }
+
   if (!command) return;
   
   try {
@@ -291,6 +331,23 @@ client.on('interactionCreate', async interaction => {
     }
   }
 });
+
+// Add the event listener for reactions
+client.on('messageReactionAdd', async (reaction, user) => {
+  // When we receive a reaction we check if the reaction is partial
+  if (reaction.partial) {
+    // If the message this reaction belongs to was removed, the fetching might result in an error
+    try {
+      await reaction.fetch();
+    } catch (error) {
+      logger.error('Error fetching reaction:', error);
+      return;
+    }
+  }
+  
+  await handleReactionAdd(reaction, user);
+});
+
 
 // Handle regular messages (non-slash commands)
 client.on('messageCreate', async (message) => {
