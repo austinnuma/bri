@@ -9,6 +9,7 @@ import { handleLegacyMessage } from './utils/messageHandler.js';
 import { createMemory, MemoryTypes, MemoryCategories } from './utils/unifiedMemoryManager.js';
 import { supabase } from './services/combinedServices.js';
 import { getCacheStats, getCachedUser, getCachedMemories, warmupUserCache } from './utils/databaseCache.js';
+import { ensureQuoteTableExists } from './utils/quoteManager.js';
 
 // Get directory name in ESM
 const __filename = fileURLToPath(import.meta.url);
@@ -96,6 +97,12 @@ async function warmupActiveCaches() {
 
 // Run every 2 hours
 setInterval(warmupActiveCaches, 2 * 60 * 60 * 1000);
+
+
+// Make sure the quote table exists
+ensureQuoteTableExists().catch(err => {
+  logger.error("Error ensuring quote table exists:", err);
+});
 
 
 // ================ Memory Maintenance ================

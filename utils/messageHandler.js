@@ -16,6 +16,7 @@ import { summarizeConversation } from './summarization.js';
 import { analyzeImage, analyzeImages } from '../services/visionService.js';
 import { getBatchEmbeddings } from './improvedEmbeddings.js';
 import { getCachedUser, invalidateUserCache, warmupUserCache } from '../utils/databaseCache.js';
+import { maybeAutoSaveQuote } from './quoteManager.js';
 
 const { userConversations, userContextLengths, userDynamicPrompts } = memoryManagerState;
 
@@ -196,6 +197,11 @@ export async function handleLegacyMessage(message) {
     return;
   }
 
+    // Try to auto-save this as a quote (has a low random chance of actually saving)
+  maybeAutoSaveQuote(message, message.client.user.id).catch(error => {
+    logger.error("Error in auto quote save:", error);
+    // Don't stop message processing for quote errors
+  });
 
   // Handle regular text messages
   const effectiveSystemPrompt = getEffectiveSystemPrompt(message.author.id);
