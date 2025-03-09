@@ -15,7 +15,7 @@ function isQuotableMessage(message) {
     if (!message.content || message.content.trim() === '') return false;
     
     // Message should be at least 5 characters
-    if (message.content.length < 5) return false;
+    if (message.content.length < 1) return false;
     
     // Avoid commands and URLs-only messages
     if (message.content.startsWith('/') || message.content.startsWith('!')) return false;
@@ -85,7 +85,7 @@ export async function addQuote(userId, guildId, content, addedBy, messageId, aut
 export async function maybeAutoSaveQuote(message, botId) {
     try {
         // Random chance to save a quote (approximately 1 in 100 messages)
-        const saveChance = 0.01;
+        const saveChance = 0.05;
         if (Math.random() > saveChance) return false;
         
         // Check if this is a suitable message to quote

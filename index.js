@@ -11,6 +11,8 @@ import { supabase } from './services/combinedServices.js';
 import { getCacheStats, getCachedUser, getCachedMemories, warmupUserCache } from './utils/databaseCache.js';
 import { ensureQuoteTableExists } from './utils/quoteManager.js';
 import { handleReactionAdd } from './utils/reactionHandler.js';
+import { initializeCharacterDevelopment, advanceStorylinesPeriodicTask } from './utils/characterDevelopment.js';
+
 
 
 // Get directory name in ESM
@@ -251,6 +253,22 @@ runMemoryMaintenance().catch(err => {
 
 // Set up periodic maintenance
 setInterval(runMemoryMaintenance, MEMORY_MAINTENANCE_INTERVAL);
+
+// Initialize character development system
+try {
+  await initializeCharacterDevelopment();
+  logger.info("Character development system initialized");
+} catch (error) {
+  logger.error("Error initializing character development system:", error);
+}
+// Set up periodic tasks
+// Run storyline advancement daily
+setInterval(advanceStorylinesPeriodicTask, 24 * 60 * 60 * 1000);
+
+// Run it once at startup too
+advanceStorylinesPeriodicTask().catch(err => {
+  logger.error("Initial storyline advancement failed:", err);
+});
 
 
 

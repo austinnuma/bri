@@ -17,6 +17,14 @@ import { analyzeImage, analyzeImages } from '../services/visionService.js';
 import { getBatchEmbeddings } from './improvedEmbeddings.js';
 import { getCachedUser, invalidateUserCache, warmupUserCache } from '../utils/databaseCache.js';
 import { maybeAutoSaveQuote } from './quoteManager.js';
+import { 
+  analyzeConversationForInterests,
+  updateRelationshipAfterInteraction,
+  findRelevantContentToShare,
+  getPersonalContent,
+  personalizeResponse,
+  detectAndStoreInsideJoke
+} from './characterDevelopment.js';
 
 const { userConversations, userContextLengths, userDynamicPrompts } = memoryManagerState;
 
@@ -197,6 +205,12 @@ export async function handleLegacyMessage(message) {
     return;
   }
 
+  // Update relationship after each interaction
+  updateRelationshipAfterInteraction(message.author.id, cleanedContent).catch(error => {
+    logger.error("Error updating relationship:", error);
+    // Don't stop message processing for relationship errors
+  });
+
     // Try to auto-save this as a quote (has a low random chance of actually saving)
   maybeAutoSaveQuote(message, message.client.user.id).catch(error => {
     logger.error("Error in auto quote save:", error);
@@ -222,14 +236,44 @@ export async function handleLegacyMessage(message) {
   await message.channel.sendTyping();
 
   try {
+    // Find relevant content to potentially share with this user
+    const relevantContent = await findRelevantContentToShare(message.author.id, cleanedContent);
+    let personalContent = '';
+        
+    if (relevantContent) {
+      personalContent = await getPersonalContent(message.author.id, relevantContent);
+    }
+        
+    // If there's personal content to share, add it to the system prompt
+    if (personalContent) {
+      // Add Bri's personal content to the prompt
+      const updatedPrompt = conversation[0].content + 
+      `\n\nYou feel like sharing this personal information about yourself: ${personalContent}`;
+          
+      conversation[0] = { role: "system", content: updatedPrompt };
+    }
+    
     // Use our batched version instead of direct API call
     const completion = await getChatCompletion({
       model: defaultAskModel,
       messages: conversation,
       max_tokens: 3000,
     });
+
     let reply = completion.choices[0].message.content;
+
+    // Check for potential inside jokes
+    detectAndStoreInsideJoke(message.author.id, cleanedContent).catch(error => {
+      logger.error("Error detecting inside joke:", error);
+    });
+    
+    // Personalize response based on relationship
+    reply = await personalizeResponse(message.author.id, reply);
+
+     // Apply emoticons
     reply = replaceEmoticons(reply);
+
+    // Update conversation with Bri's response
     conversation.push({ role: "assistant", content: reply });
     userConversations.set(message.author.id, conversation);
 
@@ -334,6 +378,11 @@ async function summarizeAndExtract(userId, conversation) {
     // Extract memories from the summary
     const extractedFacts = await extractIntuitedMemories(summary, userId);
     
+    // Also analyze the conversation for interests after summarization
+    analyzeConversationForInterests(userId, conversation).catch(err => {
+      logger.error("Error analyzing summarized conversation for interests:", err);
+    });
+
     // Skip DB operations if no new facts were extracted
     if (extractedFacts.length === 0) {
       logger.info(`No new facts extracted for user ${userId}`);
