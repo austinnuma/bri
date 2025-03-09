@@ -154,7 +154,7 @@ Guidelines:
 4. Use third person (they/them/their) when referring to ${targetUsername}
 5. Be brief and direct - answer just what was asked
 6. Don't explain that you're distinguishing between users or mention mechanics of how you're answering
-7. Maintain my cheerful 10-year-old personality, but stay focused on the actual question
+7. Maintain my cheerful 14-year-old personality, but stay focused on the actual question
 
 For example, if asked "what's their favorite food" and I know it, I might say: "Oh! ${targetUsername} really likes pizza! They told me it's their favorite food!" - simple and direct.
 `;

@@ -365,6 +365,6 @@ async function handleGeneralAboutMe(interaction, userId, relationshipLevel) {
         await interaction.editReply(response);
     } catch (error) {
         logger.error("Error in handleGeneralAboutMe:", error);
-        await interaction.editReply("I'm a 10-year-old AI assistant named Bri! I love chatting with people and making new friends! What about you?");
+        await interaction.editReply("I'm a 14-year-old AI assistant named Bri! I love chatting with people and making new friends! What about you?");
     }
 }

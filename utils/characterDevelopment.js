@@ -13,7 +13,7 @@ export const RELATIONSHIP_LEVELS = {
   CLOSE_FRIEND: 4  // Deep relationship with inside jokes and shared history
 };
 
-// Initial interests - these are Bri's starting interests that fit her 10-year-old persona
+// Initial interests - these are Bri's starting interests that fit her 14-year-old persona
 const INITIAL_INTERESTS = [
   {
     name: "space exploration",
@@ -400,7 +400,7 @@ export async function analyzeConversationForInterests(userId, conversation) {
     // Use OpenAI to analyze the conversation for potential interests
     const prompt = `
 Analyze this conversation snippet and identify if the user is expressing enthusiasm or deep knowledge about any specific interests or hobbies.
-Look for topics that a 10-year-old girl like Bri might also find interesting.
+Look for topics that a 14-year-old girl like Bri might also find interesting.
 
 Only identify clear interests with strong engagement (not passing mentions).
 If you detect a genuine interest, extract: 
@@ -1163,7 +1163,7 @@ ${personalizationInstructions.join('\n')}
 The relationship level is ${relationshipLevel}/4 (higher = closer friend).
 
 Important guidelines:
-- Maintain the same 10-year-old girl personality
+- Maintain the same 14-year-old girl personality
 - Keep the main information and content from the original message
 - Don't make the personalizations feel forced or artificial
 - Don't explicitly state "since we're friends" or similar phrases
@@ -1175,7 +1175,7 @@ Important guidelines:
       messages: [
         { 
           role: "system", 
-          content: "You are Bri, a helpful AI assistant with the personality of a 10-year-old girl."
+          content: "You are Bri, a helpful AI assistant with the personality of a 14-year-old girl."
         },
         { role: "user", content: prompt }
       ],
@@ -1303,14 +1303,14 @@ export async function advanceStorylinesPeriodicTask() {
         
       const daysSinceLastUpdate = (now - lastUpdate) / (1000 * 60 * 60 * 24);
       
-      // Generate a new update every 5-10 days
-      if (daysSinceLastUpdate >= 5 && Math.random() < 0.3) {
+      // Generate a new update every 2-10 days
+      if (daysSinceLastUpdate >= 2 && Math.random() < 0.3) {
         await generateStorylineUpdate(storyline);
       }
     }
     
     // Add a new storyline occasionally
-    if (Math.random() < 0.05) { // 5% chance each time this runs
+    if (Math.random() < 0.1) { // 10% chance each time this runs
       await generateNewStoryline();
     }
     
@@ -1328,7 +1328,7 @@ async function completeStoryline(storyline) {
   try {
     // Generate a completion update using OpenAI
     const prompt = `
-You are Bri, a 10-year-old girl who has been working on this project/goal:
+You are Bri, a 14-year-old girl who has been working on this project/goal:
 ${storyline.title}: ${storyline.description}
 
 You started this on ${new Date(storyline.start_date).toLocaleDateString()} and today is the end date.
@@ -1338,14 +1338,14 @@ Previous updates:
 ${storyline.updates.map(u => `- ${u.content}`).join('\n')}
 
 Write a VERY BRIEF, excited update about finishing this project/goal. 
-Write in first person as a 10-year-old girl would talk.
+Write in first person as a 14-year-old girl would talk.
 Keep it under 2 sentences.
 `;
 
     const completion = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
       messages: [
-        { role: "system", content: "You write brief, excited updates in the voice of a 10-year-old girl." },
+        { role: "system", content: "You write brief, excited updates in the voice of a 14-year-old girl." },
         { role: "user", content: prompt }
       ],
       max_tokens: 200,
@@ -1386,7 +1386,7 @@ async function generateStorylineUpdate(storyline) {
     
     // Generate an update using OpenAI
     const prompt = `
-You are Bri, a 10-year-old girl who has been working on this project/goal:
+You are Bri, a 14-year-old girl who has been working on this project/goal:
 ${storyline.title}: ${storyline.description}
 
 You started this on ${new Date(storyline.start_date).toLocaleDateString()}.
@@ -1396,7 +1396,7 @@ Previous updates:
 ${storyline.updates.map(u => `- ${u.content}`).join('\n')}
 
 Write a VERY BRIEF, excited update about your progress on this project/goal.
-Write in first person as a 10-year-old girl would talk.
+Write in first person as a 14-year-old girl would talk.
 Keep it under 2 sentences.
 Don't repeat previous updates.
 `;
@@ -1404,7 +1404,7 @@ Don't repeat previous updates.
     const completion = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
       messages: [
-        { role: "system", content: "You write brief, excited updates in the voice of a 10-year-old girl." },
+        { role: "system", content: "You write brief, excited updates in the voice of a 14-year-old girl." },
         { role: "user", content: prompt }
       ],
       max_tokens: 200,
@@ -1453,12 +1453,12 @@ async function generateNewStoryline() {
     
     // Generate storyline idea using OpenAI
     const prompt = `
-Create a new mini-project, goal, or activity for Bri, a 10-year-old girl.
+Create a new mini-project, goal, or activity for Bri, a 14-year-old girl.
 ${interestNames.length > 0 ? `She's interested in: ${interestNames.join(', ')}` : ''}
 
 Generate a small, age-appropriate activity that:
 1. Would take 2-4 weeks to complete
-2. Is realistic for a 10-year-old
+2. Is realistic for a 14-year-old
 3. Is educational, creative, or wholesome
 4. Feels meaningful and character-building
 

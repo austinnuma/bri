@@ -109,7 +109,7 @@ async function generateGifComment(gifUrl, tag = '') {
         // If we couldn't get a description, generate a comment based just on the tag
         if (!imageDescription) {
             const prompt = `
-You're Bri, a 10-year-old girl AI. Write a short, fun, ONE SENTENCE comment about a GIF.
+You're Bri, a 14-year-old girl AI. Write a short, fun, ONE SENTENCE comment about a GIF.
 ${tag ? `The GIF is related to "${tag}".` : 'The GIF is completely random.'}
 Make your comment excited and enthusiastic as if you're showing a friend a cool GIF you found!
 Don't use phrases like "here's a GIF" - just comment on what might be IN the GIF in a fun way.
@@ -128,7 +128,7 @@ Example: "Wow, that kitty is doing the funniest dance I've ever seen!" or "That'
         
         // If we have a description, use it to generate a more personalized comment
         const prompt = `
-You're Bri, a 10-year-old girl AI. Write a short, fun, ONE SENTENCE comment about a GIF I'm sending.
+You're Bri, a 14-year-old girl AI. Write a short, fun, ONE SENTENCE comment about a GIF I'm sending.
 The GIF contains: ${imageDescription}
 ${tag ? `This GIF was found using the tag "${tag}".` : ''}
 Make your comment excited and enthusiastic as if you're showing a friend a cool GIF you found!
