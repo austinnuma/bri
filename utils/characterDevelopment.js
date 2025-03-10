@@ -1081,10 +1081,10 @@ export async function personalizeResponse(userId, baseResponse) {
     // For friends, personalize based on relationship data
     const personalizations = [];
     
-    // 1. Reference a shared interest (20% chance)
+    // 1. Reference a shared interest (10% chance)
     if (relationship.shared_interests && 
         relationship.shared_interests.length > 0 && 
-        Math.random() < 0.2) {
+        Math.random() < 0.1) {
       const randomInterest = relationship.shared_interests[
         Math.floor(Math.random() * relationship.shared_interests.length)
       ];

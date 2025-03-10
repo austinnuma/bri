@@ -12,7 +12,8 @@ import { getCacheStats, getCachedUser, getCachedMemories, warmupUserCache } from
 import { ensureQuoteTableExists } from './utils/quoteManager.js';
 import { handleReactionAdd } from './utils/reactionHandler.js';
 import { initializeCharacterDevelopment, advanceStorylinesPeriodicTask } from './utils/characterDevelopment.js';
-
+import { scheduleMemoryMaintenance } from './utils/memoryMaintenance.js';
+import { initializeTimeSystem, startTimeEventProcessing } from './utils/timeSystem.js';
 
 
 // Get directory name in ESM
@@ -130,6 +131,9 @@ setInterval(warmupActiveCaches, 2 * 60 * 60 * 1000);
 ensureQuoteTableExists().catch(err => {
   logger.error("Error ensuring quote table exists:", err);
 });
+
+
+scheduleMemoryMaintenance(24); // Run once a day
 
 
 // ================ Memory Maintenance ================
@@ -271,6 +275,18 @@ advanceStorylinesPeriodicTask().catch(err => {
 });
 
 
+// Initialize time system
+try {
+  await initializeTimeSystem(client);
+  logger.info("Time system initialized");
+  
+  // Start the time event processing (checking every minute)
+  startTimeEventProcessing(client, 1);
+  logger.info("Time event processing started");
+} catch (error) {
+  logger.error("Error initializing time system:", error);
+}
+
 
 // ================ Bot Setup and Event Handlers ================
 
@@ -310,6 +326,18 @@ client.once('ready', () => {
 
 // Handle slash command interactions
 client.on('interactionCreate', async interaction => {
+  if (interaction.isAutocomplete()) {
+    const command = client.commands.get(interaction.commandName);
+    if (!command || !command.autocomplete) return;
+    
+    try {
+      await command.autocomplete(interaction);
+    } catch (error) {
+      logger.error(`Error in autocomplete for ${interaction.commandName}:`, error);
+    }
+    return;
+  }
+
   if (!interaction.isCommand()) return;
 
   // Warm up cache for this user

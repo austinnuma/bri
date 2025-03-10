@@ -46,30 +46,136 @@ const MEMORY_CATEGORIES = {
 
 
 /**
- * Categorizes a memory text by analyzing its content
+ * Categorizes a memory text more accurately using both keywords and semantic analysis
  * @param {string} text - The memory text to categorize
  * @returns {string} - The category name
  */
 export function categorizeMemory(text) {
   const lowered = text.toLowerCase();
   
+  // Enhanced categories with more specific subcategories and examples
   const categories = [
-    { name: MEMORY_CATEGORIES.PERSONAL, keywords: ['name', 'age', 'birthday', 'born', 'lives', 'from', 'family', 'spouse', 'married', 'children', 'child', 'kids'] },
-    { name: MEMORY_CATEGORIES.PROFESSIONAL, keywords: ['job', 'work', 'career', 'company', 'business', 'profession', 'position', 'occupation', 'employed', 'studies', 'studied', 'education', 'school', 'university', 'college', 'degree'] },
-    { name: MEMORY_CATEGORIES.PREFERENCES, keywords: ['like', 'likes', 'enjoy', 'enjoys', 'love', 'loves', 'prefer', 'prefers', 'favorite', 'favourite', 'fond', 'hates', 'hate', 'dislike', 'dislikes'] },
-    { name: MEMORY_CATEGORIES.HOBBIES, keywords: ['hobby', 'hobbies', 'collect', 'collects', 'play', 'plays', 'game', 'games', 'sport', 'sports', 'activity', 'activities', 'weekend', 'spare time', 'pastime', 'leisure'] },
-    { name: MEMORY_CATEGORIES.CONTACT, keywords: ['email', 'phone', 'address', 'contact', 'reach', 'social media', 'instagram', 'twitter', 'facebook'] }
+    { 
+      name: MEMORY_CATEGORIES.PERSONAL, 
+      keywords: ['name', 'age', 'birthday', 'born', 'lives', 'from', 'family', 'spouse', 'married', 
+                'children', 'child', 'kids', 'parent', 'mother', 'father', 'sister', 'brother',
+                'nationality', 'ethnicity', 'religion', 'belief', 'identity', 'grew up', 'raised',
+                'hometown', 'background', 'history', 'personality', 'character', 'trait'],
+      examples: ['User is 32 years old', 'User lives in Chicago', 'User has two brothers']
+    },
+    { 
+      name: MEMORY_CATEGORIES.PROFESSIONAL, 
+      keywords: ['job', 'work', 'career', 'company', 'business', 'profession', 'position', 'occupation', 
+                'employed', 'studies', 'studied', 'education', 'school', 'university', 'college', 'degree', 
+                'graduated', 'student', 'major', 'field', 'industry', 'salary', 'project', 'skill', 'expertise',
+                'experience', 'trained', 'certified', 'qualification', 'resume', 'interview'],
+      examples: ['User works as a graphic designer', 'User studied biology at UCLA', 'User is looking for a new job']
+    },
+    { 
+      name: MEMORY_CATEGORIES.PREFERENCES, 
+      keywords: ['like', 'likes', 'enjoy', 'enjoys', 'love', 'loves', 'prefer', 'prefers', 'favorite', 'favourite', 
+                'fond', 'hates', 'hate', 'dislike', 'dislikes', 'interested in', 'excited by', 'appealing', 
+                'tasty', 'delicious', 'good', 'great', 'amazing', 'wonderful', 'fantastic', 'terrible', 'awful',
+                'bad', 'boring', 'interested in', 'fan of', 'doesn\'t like', 'can\'t stand', 'allergic to',
+                'prefers', 'would rather', 'wish', 'crave', 'desire', 'want', 'appreciate', 'value'],
+      examples: ['User enjoys chocolate ice cream', 'User doesn\'t like horror movies', 'User is a big fan of Taylor Swift']
+    },
+    { 
+      name: MEMORY_CATEGORIES.HOBBIES, 
+      keywords: ['hobby', 'hobbies', 'collect', 'collects', 'play', 'plays', 'game', 'games', 'sport', 'sports',
+                'activity', 'activities', 'weekend', 'spare time', 'pastime', 'leisure', 'recreation', 'interest',
+                'tournament', 'competition', 'league', 'team', 'club', 'group', 'exercise', 'workout', 'fitness',
+                'practice', 'skill', 'craft', 'art', 'music', 'instrument', 'read', 'reading', 'book', 'movie',
+                'show', 'series', 'travel', 'adventure', 'explore', 'create', 'build', 'make', 'cook', 'bake'],
+      examples: ['User plays basketball on weekends', 'User collects vintage vinyl records', 'User enjoys hiking']
+    },
+    { 
+      name: MEMORY_CATEGORIES.CONTACT, 
+      keywords: ['email', 'phone', 'address', 'contact', 'reach', 'social media', 'instagram', 'twitter', 'facebook',
+                'snapchat', 'tiktok', 'linkedin', 'profile', 'account', 'username', 'handle', 'website', 'blog',
+                'channel', 'discord', 'steam', 'gamer tag', 'psn', 'xbox live', 'contact info', 'number', 'call'],
+      examples: ['User can be reached at user@example.com', 'User\'s Instagram handle is @username']
+    }
   ];
   
-  // Check for each category
+  // Special case for food preferences - create a separate subcategory
+  const foodKeywords = ['food', 'eat', 'dish', 'meal', 'cuisine', 'cook', 'bake', 'recipe', 'restaurant', 'breakfast', 
+                        'lunch', 'dinner', 'snack', 'dessert', 'fruit', 'vegetable', 'meat', 'drink', 'beverage'];
+                      
+  const foodTermPresent = foodKeywords.some(term => lowered.includes(term));
+  const preferenceTermPresent = categories[2].keywords.some(term => lowered.includes(term));
+  
+  if (foodTermPresent && preferenceTermPresent) {
+    // This is a food preference, prioritize it as preferences category
+    return MEMORY_CATEGORIES.PREFERENCES;
+  }
+  
+  // Look for semantic keywords matches
   for (const category of categories) {
     if (category.keywords.some(keyword => lowered.includes(keyword))) {
       return category.name;
     }
   }
   
+  // Secondary analysis for preference statements that might not contain explicit keywords
+  if (lowered.includes('would like') || 
+      lowered.includes('thinks that') || 
+      lowered.includes('feels that') ||
+      lowered.includes('believes') ||
+      lowered.includes('agrees with') ||
+      lowered.includes('disagrees with')) {
+    return MEMORY_CATEGORIES.PREFERENCES;
+  }
+  
+  // Fallback: Use semantic analysis to find the best category match
+  const bestCategory = findBestCategorySemanticMatch(text, categories);
+  if (bestCategory) {
+    return bestCategory;
+  }
+  
   return MEMORY_CATEGORIES.OTHER;
 }
+
+
+/**
+ * Finds the best category match based on semantic similarity to examples
+ * @param {string} text - The memory text
+ * @param {Array} categories - Categories with examples
+ * @returns {string|null} - Best matching category or null
+ */
+function findBestCategorySemanticMatch(text, categories) {
+  // Simple implementation without requiring embeddings
+  // Count word overlap with example statements for each category
+  
+  const words = text.toLowerCase().split(/\W+/).filter(w => w.length > 2);
+  let bestMatch = null;
+  let highestScore = 0;
+  
+  for (const category of categories) {
+    if (!category.examples || category.examples.length === 0) continue;
+    
+    let categoryScore = 0;
+    for (const example of category.examples) {
+      const exampleWords = example.toLowerCase().split(/\W+/).filter(w => w.length > 2);
+      
+      // Count overlapping words
+      const overlap = words.filter(word => exampleWords.includes(word)).length;
+      categoryScore += overlap;
+    }
+    
+    // Normalize by number of examples
+    categoryScore /= category.examples.length;
+    
+    if (categoryScore > highestScore) {
+      highestScore = categoryScore;
+      bestMatch = category.name;
+    }
+  }
+  
+  // Only return if we have a meaningful match
+  return highestScore > 0.5 ? bestMatch : null;
+}
+
 
 /**
  * Returns the effective system prompt without appending memories

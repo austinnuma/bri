@@ -12,7 +12,7 @@ import { splitMessage, replaceEmoticons } from './textUtils.js';
 import { openai, getChatCompletion, defaultAskModel, supabase } from '../services/combinedServices.js';
 import { logger } from './logger.js';
 import { extractIntuitedMemories } from './extractionAndMemory.js';
-import { summarizeConversation } from './summarization.js';
+import { enhancedSummarizeConversation } from './summarization.js';
 import { analyzeImage, analyzeImages } from '../services/visionService.js';
 import { getBatchEmbeddings } from './improvedEmbeddings.js';
 import { getCachedUser, invalidateUserCache, warmupUserCache } from '../utils/databaseCache.js';
@@ -25,6 +25,8 @@ import {
   personalizeResponse,
   detectAndStoreInsideJoke
 } from './characterDevelopment.js';
+import { extractTimeAndEvent, createEvent, EVENT_TYPES, REMINDER_TIMES, getUserTimezone } from './timeSystem.js';
+
 
 const { userConversations, userContextLengths, userDynamicPrompts } = memoryManagerState;
 
@@ -262,6 +264,14 @@ export async function handleLegacyMessage(message) {
 
     let reply = completion.choices[0].message.content;
 
+    // Check for potential time-sensitive information in the user's message
+    const timeInfo = await checkForTimeRelatedContent(cleanedContent, message.author.id, message.channel.id);
+  
+    if (timeInfo && timeInfo.shouldAsk) {
+      // If time-sensitive info was found, modify Bri's response to acknowledge it
+      reply += `\n\n${timeInfo.followUpQuestion}`;
+    }
+
     // Check for potential inside jokes
     detectAndStoreInsideJoke(message.author.id, cleanedContent).catch(error => {
       logger.error("Error detecting inside joke:", error);
@@ -375,8 +385,8 @@ async function summarizeAndExtract(userId, conversation) {
       return;
     }
     
-    // Extract memories from the summary
-    const extractedFacts = await extractIntuitedMemories(summary, userId);
+     // Use the enhanced two-stage memory extraction
+     const extractedFacts = await enhancedMemoryExtraction(userId, conversationCopy);
     
     // Also analyze the conversation for interests after summarization
     analyzeConversationForInterests(userId, conversation).catch(err => {
@@ -431,5 +441,172 @@ async function summarizeAndExtract(userId, conversation) {
     }
   } catch (error) {
     logger.error(`Error in background summarization process: ${error}`);
+  }
+}
+
+/**
+ * Checks message content for time-related information and creates follow-up events
+ * @param {string} content - Message content
+ * @param {string} userId - User ID
+ * @param {string} channelId - Channel ID
+ * @returns {Promise<Object|null>} - Time-related context info or null
+ */
+async function checkForTimeRelatedContent(content, userId, channelId) {
+  try {
+    // Don't process very short messages
+    if (content.length < 10) return null;
+    
+    // Extract time and event information
+    const eventInfo = await extractTimeAndEvent(content);
+    
+    // If no time info, exit early
+    if (!eventInfo) return null;
+    
+    // Get the user's timezone
+    const timezone = await getUserTimezone(userId);
+    
+    // Check if this is a significant event that we should offer to remember
+    const isSignificantEvent = isEventSignificant(eventInfo);
+    
+    if (!isSignificantEvent) return null;
+    
+    // Generate a custom follow-up question based on the event type
+    const followUpQuestion = generateFollowUpQuestion(eventInfo);
+    
+    // For very clear, important events, automatically create a follow-up reminder
+    if (eventInfo.type === 'appointment' || 
+        eventInfo.type === 'interview' || 
+        eventInfo.title?.toLowerCase().includes('interview')) {
+      
+      // Create a follow-up event
+      await createFollowUpEvent(userId, eventInfo, channelId);
+      
+      // Create a reminder for the actual event
+      await createReminderForEvent(userId, eventInfo, channelId);
+      
+      // Return a flag indicating we've handled this automatically
+      return {
+        eventFound: true,
+        eventType: eventInfo.type,
+        shouldAsk: true,
+        followUpQuestion
+      };
+    }
+    
+    // For other events, just indicate we found something time-related
+    return {
+      eventFound: true,
+      eventType: eventInfo.type,
+      shouldAsk: true,
+      followUpQuestion
+    };
+  } catch (error) {
+    logger.error("Error checking for time-related content:", error);
+    return null;
+  }
+}
+
+/**
+ * Determines if an event is significant enough to remember
+ * @param {Object} eventInfo - Event information
+ * @returns {boolean} - Whether the event is significant
+ */
+function isEventSignificant(eventInfo) {
+  // Consider significant if it has a specific date/time
+  if (!eventInfo.date) return false;
+  
+  // Check the event type
+  const significantTypes = ['appointment', 'interview', 'meeting', 'deadline', 'exam', 'test'];
+  if (significantTypes.includes(eventInfo.type)) return true;
+  
+  // Check for important keywords in the title
+  const importantKeywords = ['interview', 'appointment', 'meeting', 'deadline', 'exam', 'test', 'birthday', 'anniversary'];
+  if (eventInfo.title && importantKeywords.some(keyword => eventInfo.title.toLowerCase().includes(keyword))) {
+    return true;
+  }
+  
+  // Default to false for other events
+  return false;
+}
+
+/**
+ * Generates a follow-up question based on event type
+ * @param {Object} eventInfo - Event information
+ * @returns {string} - Follow-up question
+ */
+function generateFollowUpQuestion(eventInfo) {
+  const eventType = eventInfo.type || 'event';
+  const eventTitle = eventInfo.title || eventType;
+  
+  switch (eventType.toLowerCase()) {
+    case 'interview':
+      return `I noticed you mentioned an interview${eventInfo.date ? ` on ${eventInfo.date}` : ''}. I'll remember to check in with you about this! Is there anything specific you'd like me to remind you about beforehand?`;
+    case 'appointment':
+      return `I see you have an appointment${eventInfo.date ? ` on ${eventInfo.date}` : ''}! I'll make a note to follow up with you on how it went.`;
+    case 'meeting':
+      return `I noticed you mentioned a meeting${eventInfo.date ? ` on ${eventInfo.date}` : ''}. I'll remember to ask you about it!`;
+    case 'deadline':
+      return `That deadline${eventInfo.date ? ` on ${eventInfo.date}` : ''} sounds important! I'll check in with you about it as it approaches.`;
+    case 'birthday':
+      return `I'll make sure to remember that birthday${eventInfo.date ? ` on ${eventInfo.date}` : ''}!`;
+    default:
+      return `I noticed you mentioned ${eventTitle}${eventInfo.date ? ` on ${eventInfo.date}` : ''}. I'll remember to follow up with you about it!`;
+  }
+}
+
+/**
+ * Creates a follow-up event for after an event occurs
+ * @param {string} userId - User ID
+ * @param {Object} eventInfo - Event information
+ * @param {string} channelId - Channel ID
+ */
+async function createFollowUpEvent(userId, eventInfo, channelId) {
+  try {
+    // Schedule follow-up for 2 hours after the event
+    const eventDate = new Date(`${eventInfo.date}T${eventInfo.time || '12:00'}`);
+    const followUpDate = new Date(eventDate.getTime() + (2 * 60 * 60 * 1000));
+    
+    // Create follow-up event
+    await createEvent({
+      user_id: userId,
+      event_type: EVENT_TYPES.FOLLOW_UP,
+      title: `Follow-up about ${eventInfo.title || eventInfo.type}`,
+      description: `Following up on ${eventInfo.type} that was scheduled for ${eventInfo.date} ${eventInfo.time || ''}`,
+      event_date: followUpDate.toISOString(),
+      reminder_minutes: [0], // Only remind at the exact time
+      channel_id: channelId
+    });
+    
+    logger.info(`Created follow-up event for user ${userId} about ${eventInfo.type}`);
+  } catch (error) {
+    logger.error("Error creating follow-up event:", error);
+  }
+}
+
+/**
+ * Creates a reminder for an event
+ * @param {string} userId - User ID
+ * @param {Object} eventInfo - Event information
+ * @param {string} channelId - Channel ID
+ */
+async function createReminderForEvent(userId, eventInfo, channelId) {
+  try {
+    // Calculate event date
+    const eventDate = new Date(`${eventInfo.date}T${eventInfo.time || '12:00'}`);
+    
+    // Create reminder event
+    await createEvent({
+      user_id: userId,
+      event_type: EVENT_TYPES.REMINDER,
+      title: eventInfo.title || `${eventInfo.type} reminder`,
+      description: `Reminder for ${eventInfo.type} on ${eventInfo.date} ${eventInfo.time || ''}`,
+      event_date: eventDate.toISOString(),
+      reminder_minutes: [REMINDER_TIMES.DAY_BEFORE, REMINDER_TIMES.HOUR_BEFORE], // Remind 1 day and 1 hour before
+      channel_id: channelId
+    });
+    
+    logger.info(`Created reminder event for user ${userId} about ${eventInfo.type}`);
+  } catch (error) {
+    logger.error("Error creating reminder event:", error);
   }
 }
