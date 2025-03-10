@@ -1,7 +1,7 @@
 // memoryMaintenance.js - Utilities for memory quality management
 import { supabase } from '../services/combinedServices.js';
 import { logger } from './logger.js';
-import { categorizeMemory } from './unifiedMemoryManager.js';
+import { categorizeMemory, MemoryCategories } from './unifiedMemoryManager.js';
 import { openai } from '../services/combinedServices.js';
 import { getEmbedding } from './improvedEmbeddings.js';
 import natural from 'natural';
@@ -456,3 +456,219 @@ export function scheduleMemoryMaintenance(intervalHours = 24) {
   
   logger.info(`Memory maintenance scheduled to run every ${intervalHours} hours`);
 }
+
+
+/**
+ * AI-based memory curation for a user
+ * @param {string} userId - User ID
+ * @returns {Promise<Object>} Results of the curation
+ */
+export async function curateMemoriesWithAI(userId) {
+    try {
+      logger.info(`Starting AI-based memory curation for user ${userId}`);
+      
+      // Get all memories for this user (by category to avoid context limits)
+      const categories = Object.values(MemoryCategories);
+      let totalProcessed = 0;
+      let totalKept = 0;
+      let totalRemoved = 0;
+      let totalMerged = 0;
+      let reasons = []; // Create an array to store reasoning from each category
+      
+      // Process each category separately to avoid context limits
+      for (const category of categories) {
+        const { data: memories, error } = await supabase
+          .from('unified_memories')
+          .select('id, memory_text, confidence, category')
+          .eq('user_id', userId)
+          .eq('category', category)
+          
+        if (error || !memories || memories.length < 3) {
+          // Skip if error or not enough memories to curate
+          continue;
+        }
+        
+        totalProcessed += memories.length;
+        
+        // Create a prompt for the AI
+        const prompt = `
+  As a memory management expert, your task is to analyze and curate this list of memories about a user.
+  The goal is to keep only the most useful, accurate, and non-redundant memories.
+  
+  Current memories in the "${category}" category:
+  ${memories.map((mem, i) => `${i+1}. "${mem.memory_text}" (confidence: ${mem.confidence})`).join('\n')}
+  
+  Please analyze these memories and:
+  1. Identify duplicates or highly similar memories
+  2. Identify low-quality or uninformative memories
+  3. Identify memories that could be merged or combined
+  4. Keep only the most important, high-quality memories
+  
+  Return your analysis as a JSON object with these properties:
+  {
+    "keep": [1, 4, 7],  // Array of indices (1-based) of memories to keep as-is
+    "remove": [2, 3, 5], // Array of indices of memories to remove completely
+    "merge": [  // Array of merge operations
+      {
+        "indices": [6, 8, 9],  // Indices of memories to merge
+        "new_text": "Improved combined memory text"  // The merged memory text
+      }
+    ],
+    "reasoning": "Brief explanation of your decisions"
+  }
+  `;
+  
+        const response = await openai.chat.completions.create({
+          model: "gpt-3.5-turbo", // Can use a cheaper model for this task
+          messages: [
+            { 
+              role: "system", 
+              content: "You are an expert system for memory management and curation. Your task is to analyze user memories and determine which to keep, remove, or merge." 
+            },
+            { role: "user", content: prompt }
+          ],
+          response_format: { type: "json_object" }
+        });
+        
+        // Parse the AI's response
+        const result = JSON.parse(response.choices[0].message.content);
+      
+        // Store the reasoning in our array
+        if (result.reasoning) {
+        reasons.push(`${category}: ${result.reasoning}`);
+        }
+        
+        // Process the curation recommendations
+        
+        // 1. Handle memories to remove
+        const idsToRemove = result.remove.map(idx => memories[idx-1].id);
+        const { error: removeError } = await supabase
+          .from('unified_memories')
+          .delete()  // Actually delete instead of marking inactive
+          .in('id', idsToRemove);
+            
+          if (!removeError) {
+            totalRemoved += idsToRemove.length;
+            logger.info(`Removed ${idsToRemove.length} memories in category ${category}`);
+          }
+        
+        // 2. Handle memories to merge
+        if (result.merge && result.merge.length > 0) {
+          for (const merge of result.merge) {
+            // Get the highest confidence from merged memories
+            const mergedMemories = merge.indices.map(idx => memories[idx-1]);
+            const highestConfidence = Math.max(...mergedMemories.map(m => m.confidence));
+            
+            // Create the new merged memory
+            const { data: newMemory, error: createError } = await supabase
+              .from('unified_memories')
+              .insert({
+                user_id: userId,
+                memory_text: merge.new_text,
+                memory_type: 'merged',
+                category: category,
+                confidence: highestConfidence,
+                source: 'ai_curation'
+              })
+              .select()
+              .single();
+              
+            if (!createError && newMemory) {
+              // Deactivate the original memories
+              const idsToDeactivate = merge.indices.map(idx => memories[idx-1].id);
+              await supabase
+                .from('unified_memories')
+                .update({ active: false })
+                .in('id', idsToDeactivate);
+                
+              totalMerged += idsToDeactivate.length;
+            }
+          }
+        }
+        
+        // Calculate kept memories
+        if (result.keep && result.keep.length > 0) {
+          totalKept += result.keep.length;
+        }
+        
+        logger.info(`AI curation for category ${category}: processed ${memories.length}, kept ${result.keep?.length || 0}, removed ${result.remove?.length || 0}, merged ${result.merge?.length || 0} groups`);
+      }
+      
+    // Now return with the combined reasoning outside the loop
+    return {
+        processed: totalProcessed,
+        kept: totalKept,
+        removed: totalRemoved,
+        merged: totalMerged,
+        reasoning: reasons.join(' | ') // Join all reasoning strings
+      };
+    } catch (error) {
+      logger.error(`Error in AI memory curation for user ${userId}:`, error);
+      return {
+        processed: 0,
+        kept: 0,
+        removed: 0,
+        merged: 0,
+        error: error.message
+      };
+    }
+  }
+
+  // Make this less frequent than normal maintenance
+  export async function runAIMemoryCuration() {
+    try {
+      // First, get all unique user_ids that have memories
+      const { data: users, error: userError } = await supabase
+        .from('unified_memories')
+        .select('user_id')
+        .limit(1000);
+        
+      if (userError || !users) {
+        logger.error("Error getting users for AI curation:", userError);
+        return;
+      }
+      
+      // Get unique user IDs
+      const uniqueUserIds = [...new Set(users.map(u => u.user_id))];
+      
+      // For each user, count their memories
+      const userMemoryCounts = [];
+      for (const userId of uniqueUserIds) {
+        const { count, error: countError } = await supabase
+          .from('unified_memories')
+          .select('id', { count: 'exact', head: true })
+          .eq('user_id', userId);
+          
+        if (!countError && count) {
+          userMemoryCounts.push({ user_id: userId, count });
+        }
+      }
+      
+      // Sort by count descending
+      userMemoryCounts.sort((a, b) => b.count - a.count);
+      
+      // Take top 5 users with at least 20 memories
+      const usersToProcess = userMemoryCounts
+        .filter(u => u.count >= 20)
+        .slice(0, 5);
+      
+      logger.info(`Found ${usersToProcess.length} users for AI memory curation`);
+      
+      // Process each user
+      for (const user of usersToProcess) {
+        await curateMemoriesWithAI(user.user_id);
+        await new Promise(resolve => setTimeout(resolve, 5000));
+      }
+      
+      logger.info("AI memory curation completed successfully");
+    } catch (error) {
+      logger.error("Error in AI memory curation:", error);
+    }
+  }
+  
+  // Schedule it weekly
+  const WEEKLY = 7 * 24 * 60 * 60 * 1000;
+  setInterval(runAIMemoryCuration, WEEKLY);
+  
+  // Run it once manually for testing
+   setTimeout(runAIMemoryCuration, 60000); // Run after 1 minute for testing

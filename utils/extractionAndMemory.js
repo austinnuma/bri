@@ -9,6 +9,8 @@ import {
   MemoryTypes, 
   MemoryCategories 
 } from './unifiedMemoryManager.js';
+import { enhancedSummarizeConversation } from './summarization.js';
+
 
 // // Custom error classes for more specific error handling
 // class UserMemoryError extends Error {
@@ -471,7 +473,7 @@ export async function enhancedMemoryExtraction(userId, conversation) {
     logger.info(`Running enhanced two-stage memory extraction for user ${userId}`);
     
     // Step 1: Generate conversation summary
-    const summary = await summarizeConversation(conversation);
+    const summary = await enhancedSummarizeConversation(conversation);
     if (!summary) {
       logger.warn(`Failed to generate summary for user ${userId}`);
       return [];

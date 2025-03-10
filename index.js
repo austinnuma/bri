@@ -12,7 +12,7 @@ import { getCacheStats, getCachedUser, getCachedMemories, warmupUserCache } from
 import { ensureQuoteTableExists } from './utils/quoteManager.js';
 import { handleReactionAdd } from './utils/reactionHandler.js';
 import { initializeCharacterDevelopment, advanceStorylinesPeriodicTask } from './utils/characterDevelopment.js';
-import { scheduleMemoryMaintenance } from './utils/memoryMaintenance.js';
+import { scheduleMemoryMaintenance, runMemoryMaintenance } from './utils/memoryMaintenance.js';
 import { initializeTimeSystem, startTimeEventProcessing } from './utils/timeSystem.js';
 
 
@@ -133,12 +133,12 @@ ensureQuoteTableExists().catch(err => {
 });
 
 
-scheduleMemoryMaintenance(24); // Run once a day
+scheduleMemoryMaintenance(1); // Run once a day
 
 
 // ================ Memory Maintenance ================
 // Set up periodic memory maintenance
-const MEMORY_MAINTENANCE_INTERVAL = 24 * 60 * 60 * 1000; // 24 hours
+const MEMORY_MAINTENANCE_INTERVAL = 60 * 60 * 1000; // 1 hour
 
 
 /**
@@ -175,88 +175,11 @@ function categorizeMemory(text) {
   return MemoryCategories.OTHER;
 }
 
-/**
- * Moves memories from the plain text memory field to vector storage
- * Runs periodically to ensure all memories are properly vectorized
- */
-async function runMemoryMaintenance() {
-  try {
-    logger.info("Starting scheduled memory maintenance...");
-    
-    // Get all user records with non-empty memory field
-    const { data, error } = await supabase
-      .from('user_conversations')
-      .select('user_id, memory')
-      .not('memory', 'is', null);
-      
-    if (error) {
-      logger.error("Error fetching records for maintenance:", error);
-      return;
-    }
-    
-    let totalProcessed = 0;
-    
-    // Process each user's memories
-    for (const record of data) {
-      if (!record.memory || record.memory.trim() === '') continue;
-      
-      const memories = record.memory.split('\n').filter(m => m.trim() !== '');
-      if (memories.length === 0) continue;
-      
-      logger.info(`Processing ${memories.length} memories for user ${record.user_id}`);
-      
-      // Vector store each memory
-      const processedMemories = [];
-      for (const memoryText of memories) {
-        if (memoryText.length < 5) continue; // Skip very short entries
-        
-        // Categorize the memory
-        const category = categorizeMemory(memoryText);
-        
-        // Create the memory in the unified system
-        const result = await createMemory(
-          record.user_id,
-          memoryText,
-          MemoryTypes.EXPLICIT,  // These are explicit memories
-          category,
-          1.0,                   // Full confidence for explicit memories
-          'memory_maintenance'   // Source of the memory
-        );
-        
-        if (result) {
-          processedMemories.push(memoryText);
-          totalProcessed++;
-        }
-      }
-      
-      // If any memories were successfully processed, remove them from the plain text field
-      if (processedMemories.length > 0) {
-        // Create a new memories string without the processed ones
-        const remainingMemories = memories
-          .filter(mem => !processedMemories.includes(mem))
-          .join('\n');
-          
-        // Update the record
-        await supabase
-          .from('user_conversations')
-          .update({ memory: remainingMemories })
-          .eq('user_id', record.user_id);
-      }
-    }
-    
-    logger.info(`Memory maintenance complete. Processed ${totalProcessed} memories.`);
-  } catch (error) {
-    logger.error("Error during memory maintenance:", error);
-  }
-}
-
 // Run maintenance immediately on startup
 runMemoryMaintenance().catch(err => {
   logger.error("Initial memory maintenance failed:", err);
 });
 
-// Set up periodic maintenance
-setInterval(runMemoryMaintenance, MEMORY_MAINTENANCE_INTERVAL);
 
 // Initialize character development system
 try {
@@ -280,8 +203,8 @@ try {
   await initializeTimeSystem(client);
   logger.info("Time system initialized");
   
-  // Start the time event processing (checking every minute)
-  startTimeEventProcessing(client, 1);
+  // Start the time event processing (checking every 5 minutes)
+  startTimeEventProcessing(client, 5);
   logger.info("Time event processing started");
 } catch (error) {
   logger.error("Error initializing time system:", error);
@@ -428,3 +351,14 @@ process.on('uncaughtException', (error) => {
 process.on('unhandledRejection', (reason, promise) => {
   logger.error('Unhandled Rejection at:', promise, 'reason:', reason);
 });
+
+// Test for memory maintenance
+setTimeout(async () => {
+  logger.info("Running manual memory maintenance test...");
+  try {
+    const result = await runMemoryMaintenance();
+    logger.info("Memory maintenance test completed:", result);
+  } catch (error) {
+    logger.error("Memory maintenance test failed:", error);
+  }
+}, 10000); // Run 10 seconds after startup

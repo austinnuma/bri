@@ -11,11 +11,11 @@ import {
 import { splitMessage, replaceEmoticons } from './textUtils.js';
 import { openai, getChatCompletion, defaultAskModel, supabase } from '../services/combinedServices.js';
 import { logger } from './logger.js';
-import { extractIntuitedMemories } from './extractionAndMemory.js';
+import { extractIntuitedMemories, enhancedMemoryExtraction } from './extractionAndMemory.js';
 import { enhancedSummarizeConversation } from './summarization.js';
 import { analyzeImage, analyzeImages } from '../services/visionService.js';
 import { getBatchEmbeddings } from './improvedEmbeddings.js';
-import { getCachedUser, invalidateUserCache, warmupUserCache } from '../utils/databaseCache.js';
+import { getCachedUser, invalidateUserCache, warmupUserCache, cachedVectorSearch } from '../utils/databaseCache.js';
 import { maybeAutoSaveQuote } from './quoteManager.js';
 import { 
   analyzeConversationForInterests,
@@ -26,6 +26,8 @@ import {
   detectAndStoreInsideJoke
 } from './characterDevelopment.js';
 import { extractTimeAndEvent, createEvent, EVENT_TYPES, REMINDER_TIMES, getUserTimezone } from './timeSystem.js';
+import { getEmbedding } from './improvedEmbeddings.js';
+import natural from 'natural';
 
 
 const { userConversations, userContextLengths, userDynamicPrompts } = memoryManagerState;
@@ -40,6 +42,62 @@ const userLastActive = new Map();
 const lastSummaryTimestamps = new Map();
 // Track new messages since last extraction
 const userMessageCounters = new Map();
+
+function normalizeForComparison(text) {
+  return text.toLowerCase()
+    .replace(/[.,\/#!$%\^&\*;:{}=\-_`~()]/g, "")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+
+/**
+ * Checks if a memory text is similar to any existing memory for a user
+ * @param {string} userId - User ID
+ * @param {string} memoryText - Memory text to check
+ * @returns {Promise<boolean>} - Whether a similar memory exists
+ */
+async function isDuplicateMemory(userId, memoryText) {
+  try {
+    // First, extract the category to only compare within the same type of memory
+    const category = categorizeMemory(memoryText);
+    
+    // Get existing memories in this category
+    const { data, error } = await supabase
+      .from('unified_memories')
+      .select('memory_text')
+      .eq('user_id', userId)
+      .eq('category', category)
+      .eq('active', true);
+      
+    if (error || !data || data.length === 0) {
+      return false; // No memories found to compare against
+    }
+    
+    // Normalize the input text for comparison
+    const normalizedInput = normalizeForComparison(memoryText);
+    
+    // Check each memory for similarity using Jaro-Winkler (better for text similarity)
+    for (const memory of data) {
+      const normalizedMemory = normalizeForComparison(memory.memory_text);
+      
+      // Calculate text similarity
+      const similarity = natural.JaroWinklerDistance(normalizedInput, normalizedMemory);
+      
+      // Use a higher threshold (0.92+) for true duplicates
+      if (similarity > 0.92) {
+        logger.info(`Found similar memory: "${memory.memory_text}" vs "${memoryText}" (similarity: ${similarity.toFixed(3)})`);
+        return true;
+      }
+    }
+    
+    // No similar memories found
+    return false;
+  } catch (error) {
+    logger.error("Error checking for duplicate memory:", error);
+    return false; // When in doubt, don't block the insertion
+  }
+}
 
 
 /**
@@ -379,7 +437,7 @@ async function summarizeAndExtract(userId, conversation) {
     const conversationCopy = [...conversation];
     
     // Summarize the conversation
-    const summary = await summarizeConversation(conversationCopy);
+    const summary = await enhancedSummarizeConversation(conversationCopy);
     if (!summary) {
       logger.warn(`Failed to generate summary for user ${userId}`);
       return;
@@ -410,34 +468,81 @@ async function summarizeAndExtract(userId, conversation) {
       confidence: 0.8,
       source: 'conversation_extraction'
     }));
-    
+
     // Get all embeddings in a single batch
     const texts = extractedFacts;
     const embeddings = await getBatchEmbeddings(texts);
-    
+
     // Add embeddings to memory objects
     for (let i = 0; i < memoryObjects.length; i++) {
       memoryObjects[i].embedding = embeddings[i];
     }
-    // Insert all memories in a single database operation if possible
-    try {
-      const { data, error } = await supabase
-        .from('unified_memories')
-        .insert(memoryObjects);
+
+    // Deduplicate memories before insertion
+    const uniqueMemories = [];
+    const duplicateIndices = new Set();
+
+    // Check each memory against existing memories in the database
+    for (let i = 0; i < memoryObjects.length; i++) {
+      if (duplicateIndices.has(i)) continue; // Skip if already marked as duplicate
+      
+      const memory = memoryObjects[i];
+      const isDuplicate = await isDuplicateMemory(userId, memory.memory_text);
+      
+      if (!isDuplicate) {
+        uniqueMemories.push(memory);
         
-      if (error) {
-        logger.error("Error batch inserting memories:", error);
-        // Fall back to individual inserts if batch fails
-        for (const fact of extractedFacts) {
-          await insertIntuitedMemory(userId, fact);
+        // Also check against other memories in this batch
+        for (let j = i + 1; j < memoryObjects.length; j++) {
+          if (duplicateIndices.has(j)) continue;
+          
+          const otherMemory = memoryObjects[j];
+          const similarity = natural.JaroWinklerDistance(
+            normalizeForComparison(memory.memory_text),
+            normalizeForComparison(otherMemory.memory_text)
+          );
+          
+          if (similarity > 0.92) {
+            duplicateIndices.add(j); // Mark as duplicate
+            logger.info(`Found duplicate in batch: "${memory.memory_text}" vs "${otherMemory.memory_text}"`);
+          }
+        }
+      } else {
+        duplicateIndices.add(i);
+      }
+    }
+
+    logger.info(`Filtered out ${duplicateIndices.size} duplicate memories, inserting ${uniqueMemories.length} unique memories`);
+
+    // Insert only unique memories
+    if (uniqueMemories.length > 0) {
+      try {
+        // Use onConflict strategy (Solution 5)
+        const { data, error } = await supabase
+          .from('unified_memories')
+          .insert(uniqueMemories, {
+            onConflict: 'user_id,memory_text', // Add this if your DB schema has a unique constraint
+            ignoreDuplicates: true
+          });
+          
+        if (error) {
+          logger.error("Error batch inserting memories:", error);
+          // Fall back to individual inserts if batch fails
+          for (const memory of uniqueMemories) {
+            await insertIntuitedMemory(userId, memory.memory_text);
+          }
+        } else {
+          logger.info(`Successfully inserted ${uniqueMemories.length} unique memories for user ${userId}`);
+        }
+      } catch (batchError) {
+        logger.error("Error in batch memory insertion:", batchError);
+        // Fall back to individual inserts
+        for (const memory of uniqueMemories) {
+          await insertIntuitedMemory(userId, memory.memory_text);
         }
       }
-    } catch (batchError) {
-      logger.error("Error in batch memory insertion:", batchError);
-      // Fall back to individual inserts
-      for (const fact of extractedFacts) {
-        await insertIntuitedMemory(userId, fact);
-      }
+    } else {
+      logger.info(`No unique memories to insert for user ${userId}`);
     }
   } catch (error) {
     logger.error(`Error in background summarization process: ${error}`);
