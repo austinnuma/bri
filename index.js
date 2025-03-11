@@ -14,6 +14,7 @@ import { handleReactionAdd } from './utils/reactionHandler.js';
 import { initializeCharacterDevelopment, advanceStorylinesPeriodicTask } from './utils/characterDevelopment.js';
 import { scheduleMemoryMaintenance, runMemoryMaintenance } from './utils/memoryMaintenance.js';
 import { initializeTimeSystem, startTimeEventProcessing } from './utils/timeSystem.js';
+import { testDatabaseInDepth } from './utils/databaseDiagnostics.js';
 
 
 // Get directory name in ESM
@@ -30,6 +31,10 @@ const client = new Client({
     GatewayIntentBits.GuildMessageReactions
   ],
 });
+
+// Get the client ID and guild ID
+const clientId = process.env.CLIENT_ID || client.user.id;
+const testGuildId = process.env.TEST_GUILD_ID; // Add this to your .env file
 
 // Create a new collection for slash commands
 client.commands = new Collection();
@@ -203,19 +208,72 @@ try {
   await initializeTimeSystem(client);
   logger.info("Time system initialized");
   
-  // Start the time event processing (checking every 5 minutes)
-  startTimeEventProcessing(client, 5);
+  // Start the time event processing (checking every 1 minute)
+  startTimeEventProcessing(client, 1);
   logger.info("Time event processing started");
 } catch (error) {
   logger.error("Error initializing time system:", error);
 }
 
 
+/**
+ * Test database connection and tables
+ */
+async function testDatabaseAccess() {
+  try {
+    logger.info("Testing database access...");
+    
+    // Test basic connection
+    const { data, error } = await supabase.from('bri_scheduled_messages').select('count(*)', { count: 'exact', head: true });
+    
+    if (error) {
+      logger.error("Database connection error:", error);
+      return false;
+    }
+    
+    logger.info(`Database connection successful. Found ${data} scheduled messages.`);
+    
+    // Test tables needed for the time system
+    const tables = ['user_timezones', 'bri_events', 'bri_scheduled_messages'];
+    
+    for (const table of tables) {
+      const { error: tableError } = await supabase
+        .from(table)
+        .select('count(*)', { count: 'exact', head: true });
+        
+      if (tableError) {
+        if (tableError.code === '42P01') { // Table doesn't exist
+          logger.error(`Table '${table}' doesn't exist in the database`);
+        } else {
+          logger.error(`Error checking table '${table}':`, tableError);
+        }
+      } else {
+        logger.info(`Table '${table}' exists and is accessible`);
+      }
+    }
+    
+    return true;
+  } catch (error) {
+    logger.error("Error testing database access:", error);
+    return false;
+  }
+}
+
+
 // ================ Bot Setup and Event Handlers ================
 
 // When the client is ready, run this code (only once)
-client.once('ready', () => {
+client.once('ready', async () => {
   logger.info(`Logged in as ${client.user.tag}!`);
+
+  // Test database access
+  //const databaseOk = await testDatabaseAccess();
+  //if (!databaseOk) {
+  //  logger.warn("Database access issues detected. Time-related features may not work correctly.");
+  //}
+
+  // Run database tests
+  //await testDatabaseInDepth();
   
   // Register slash commands
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -230,17 +288,26 @@ client.once('ready', () => {
   
   logger.info(`Registering commands for application ID: ${clientId}`);
   
+  // Register commands
   (async () => {
     try {
       logger.info('Started refreshing application (/) commands.');
       
-      // Use the client ID we verified above
-      await rest.put(
-        Routes.applicationCommands(clientId),
-        { body: commands },
-      );
-      
-      logger.info('Successfully reloaded application (/) commands.');
+      if (testGuildId) {
+        // For testing: Register commands to a specific guild (instant update)
+        await rest.put(
+          Routes.applicationGuildCommands(clientId, testGuildId),
+          { body: commands },
+        );
+        logger.info(`Successfully reloaded application commands for test guild ${testGuildId}.`);
+      } else {
+        // For production: Register commands globally (can take up to an hour)
+        await rest.put(
+          Routes.applicationCommands(clientId),
+          { body: commands },
+        );
+        logger.info('Successfully reloaded global application commands.');
+      }
     } catch (error) {
       logger.error('Error registering commands:', error);
     }

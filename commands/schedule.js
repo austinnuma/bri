@@ -1,13 +1,33 @@
 // commands/schedule.js
 import { SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
 import { logger } from '../utils/logger.js';
-import { createScheduledMessage, getUserTimezone } from '../utils/timeSystem.js';
+import { createScheduledMessage, getUserTimezone, getActiveScheduledMessages, cancelScheduledMessage } from '../utils/timeSystem.js';
 import { openai } from '../services/combinedServices.js';
+import { createClient } from '@supabase/supabase-js';
+
+// Initialize a dedicated Supabase client just for this command
+const schedulesDb = createClient(
+    process.env.SUPABASE_URL,
+    process.env.SUPABASE_KEY
+  );
 
 export const data = new SlashCommandBuilder()
     .setName('schedule')
     .setDescription('Schedule recurring messages from Bri')
     .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild) // Only server managers can use this
+    .addSubcommand(subcommand =>
+        subcommand
+            .setName('list')
+            .setDescription('List all active scheduled messages in this server'))
+    .addSubcommand(subcommand =>
+        subcommand
+            .setName('cancel')
+            .setDescription('Cancel a scheduled message')
+            .addStringOption(option =>
+                option
+                    .setName('id')
+                    .setDescription('ID of the scheduled message to cancel')
+                    .setRequired(true)))
     .addSubcommand(subcommand =>
         subcommand
             .setName('daily')
@@ -77,14 +97,37 @@ export async function execute(interaction) {
     
     try {
         const subcommand = interaction.options.getSubcommand();
+        logger.info(`Executing schedule command with subcommand: ${subcommand}`);
         
         if (subcommand === 'daily') {
             await handleDailySchedule(interaction);
         } else if (subcommand === 'weekly') {
             await handleWeeklySchedule(interaction);
+        } else if (subcommand === 'list') {
+            await handleListSchedule(interaction);
+        } else if (subcommand === 'cancel') {
+            await handleCancelSchedule(interaction);
+        } else {
+            logger.warn(`Unknown subcommand: ${subcommand}`);
+            await interaction.editReply({
+                content: "Unknown subcommand. Please try again with a valid option.",
+                ephemeral: true
+            });
         }
     } catch (error) {
         logger.error('Error in schedule command:', error);
+        logger.error('Error stack:', error.stack);
+                
+        // Provide a more detailed error message to the user
+        let errorMessage = "Sorry, something went wrong setting up your scheduled message.";
+        
+        // Check for specific error types
+        if (error.message && error.message.includes("database")) {
+            errorMessage += " There seems to be a database issue.";
+        } else if (error.message && error.message.includes("permission")) {
+            errorMessage += " I might not have the necessary permissions.";
+        }
+
         return interaction.editReply({
             content: "Sorry, something went wrong setting up your scheduled message. Please try again.",
             ephemeral: true
@@ -121,7 +164,7 @@ async function handleDailySchedule(interaction) {
         }
         
         // Get the timezone for the guild/server
-        const guildTimezone = await getGuildTimezone(interaction.guildId) || 'America/New_York';
+        const guildTimezone = await getGuildTimezone(interaction.guildId, interaction.client) || 'America/Chicago';
         
         // Create cron schedule for daily at the specified time
         const cronSchedule = `${minutes} ${hours} * * *`;
@@ -216,7 +259,7 @@ async function handleWeeklySchedule(interaction) {
         }
         
         // Get the timezone for the guild/server
-        const guildTimezone = await getGuildTimezone(interaction.guildId) || 'America/New_York';
+        const guildTimezone = await getGuildTimezone(interaction.guildId, interaction.client) || 'America/Chicago';
         
         // Convert day to day number (0-6, Sunday-Saturday)
         const dayMap = {
@@ -270,23 +313,24 @@ async function handleWeeklySchedule(interaction) {
  * Get the timezone for a guild
  * Uses the guild owner's timezone as the guild timezone
  * @param {string} guildId - Guild ID
+ * @param {Client} client - Discord client
  * @returns {Promise<string>} - Guild timezone
  */
-async function getGuildTimezone(guildId) {
+async function getGuildTimezone(guildId, client) {
     try {
         // Use interaction member's timezone for now
         // In a more complex system, you could store guild timezone separately
-        const guild = await interaction.client.guilds.fetch(guildId);
-        if (!guild) return 'America/New_York';
+        const guild = await client.guilds.fetch(guildId);
+        if (!guild) return 'America/Chicago';
         
         const owner = await guild.fetchOwner();
-        if (!owner) return 'America/New_York';
+        if (!owner) return 'America/Chicago';
         
         const ownerTimezone = await getUserTimezone(owner.id);
         return ownerTimezone;
     } catch (error) {
         logger.error(`Error getting guild timezone for ${guildId}:`, error);
-        return 'America/New_York';
+        return 'America/Chicago';
     }
 }
 
@@ -355,3 +399,142 @@ Add appropriate emoji.
         }
     }
 }
+
+/**
+ * Handle the 'list' subcommand
+ */
+async function handleListSchedule(interaction) {
+    try {
+      // Get all active scheduled messages for this guild
+      const messages = await getActiveScheduledMessages(interaction.guildId);
+      
+      if (!messages || messages.length === 0) {
+        return interaction.editReply({
+          content: "There are no active scheduled messages in this server.",
+          ephemeral: true
+        });
+      }
+      
+      // Format messages for display
+      let formattedList = "**Active Scheduled Messages:**\n\n";
+      
+      for (const msg of messages) {
+        // Get channel name if possible
+        let channelName = msg.channel_id;
+        try {
+          const channel = await interaction.client.channels.fetch(msg.channel_id);
+          if (channel) {
+            channelName = `#${channel.name}`;
+          }
+        } catch (error) {
+          // If channel can't be fetched, just use ID
+        }
+        
+        // Format cron schedule in a human-readable way
+        const cronParts = msg.cron_schedule.split(' ');
+        let scheduleDesc = "";
+        
+        if (cronParts.length === 5) {
+          const [minute, hour, dayOfMonth, month, dayOfWeek] = cronParts;
+          
+          if (dayOfMonth === '*' && month === '*' && dayOfWeek === '*') {
+            // Daily
+            scheduleDesc = `Daily at ${hour}:${minute.padStart(2, '0')}`;
+          } else if (dayOfMonth === '*' && month === '*') {
+            // Weekly
+            const days = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
+            const dayNames = dayOfWeek.split(',').map(d => days[parseInt(d)] || `Day ${d}`);
+            scheduleDesc = `Every ${dayNames.join(', ')} at ${hour}:${minute.padStart(2, '0')}`;
+          } else {
+            // Custom/complex schedule
+            scheduleDesc = `Custom schedule: ${msg.cron_schedule}`;
+          }
+        } else {
+          scheduleDesc = `Schedule: ${msg.cron_schedule}`;
+        }
+        
+        // Add this message to the list
+        formattedList += `**ID: ${msg.id}** - ${msg.message_type} message\n`;
+        formattedList += `Channel: ${channelName}\n`;
+        formattedList += `${scheduleDesc} (${msg.timezone})\n`;
+        
+        // Add a preview of the message content (truncated if too long)
+        const contentPreview = msg.message_content.length > 50 
+          ? msg.message_content.substring(0, 50) + "..." 
+          : msg.message_content;
+        formattedList += `Message: ${contentPreview}\n\n`;
+      }
+      
+      // Add instructions for canceling
+      formattedList += "To cancel a scheduled message, use `/schedule cancel id:[ID]`\n";
+      
+      return interaction.editReply({
+        content: formattedList,
+        ephemeral: true
+      });
+    } catch (error) {
+      logger.error('Error listing scheduled messages:', error);
+      return interaction.editReply({
+        content: "Sorry, something went wrong retrieving the scheduled messages.",
+        ephemeral: true
+      });
+    }
+  }
+
+  /**
+ * Handle the 'cancel' subcommand
+ */
+async function handleCancelSchedule(interaction) {
+    try {
+      const messageId = interaction.options.getString('id');
+      if (!messageId) {
+        return interaction.editReply({
+          content: "Please provide a valid message ID to cancel.",
+          ephemeral: true
+        });
+      }
+      
+      // First check if the message exists and is in this guild
+      const messages = await getActiveScheduledMessages(interaction.guildId);
+      const messageToCancel = messages.find(msg => msg.id.toString() === messageId);
+      
+      if (!messageToCancel) {
+        return interaction.editReply({
+          content: "I couldn't find an active scheduled message with that ID in this server.",
+          ephemeral: true
+        });
+      }
+      
+      // Cancel the message
+      const success = await cancelScheduledMessage(messageId);
+      
+      if (!success) {
+        return interaction.editReply({
+          content: "Sorry, I couldn't cancel that scheduled message. Please try again.",
+          ephemeral: true
+        });
+      }
+      
+      // Get channel name if possible
+      let channelName = messageToCancel.channel_id;
+      try {
+        const channel = await interaction.client.channels.fetch(messageToCancel.channel_id);
+        if (channel) {
+          channelName = `#${channel.name}`;
+        }
+      } catch (error) {
+        // If channel can't be fetched, just use ID
+      }
+      
+      return interaction.editReply({
+        content: `✅ Successfully canceled the scheduled ${messageToCancel.message_type} message in ${channelName}.`,
+        ephemeral: true
+      });
+    } catch (error) {
+      logger.error('Error canceling scheduled message:', error);
+      return interaction.editReply({
+        content: "Sorry, something went wrong canceling the scheduled message.",
+        ephemeral: true
+      });
+    }
+  }

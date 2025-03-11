@@ -1,10 +1,26 @@
 // timeSystem.js - Time awareness and calendar system for Bri
-import { supabase } from '../services/combinedServices.js';
+import { createClient } from '@supabase/supabase-js';
 import { logger } from './logger.js';
 import { openai } from '../services/combinedServices.js';
+import { supabase } from '../services/combinedServices.js';
+
+let discordClientRef = null;
+
+// Separate Supabase client
+//const dedicatedDb = createClient(
+//    process.env.SUPABASE_URL,
+//    process.env.SUPABASE_KEY
+//  );
 
 // Default timezone (fallback when user hasn't set one)
-const DEFAULT_TIMEZONE = 'America/New_York';
+const DEFAULT_TIMEZONE = 'America/Chicago';
+
+// Table name constants - modify these to match your actual table names
+const TABLE_NAMES = {
+    USER_TIMEZONE: 'user_timezones',
+    EVENTS: 'bri_events',
+    SCHEDULED_MESSAGES: 'bri_scheduled_messages'
+  };
 
 // Event types
 export const EVENT_TYPES = {
@@ -28,54 +44,60 @@ export const REMINDER_TIMES = {
  * Creates necessary database tables if they don't exist.
  */
 export async function initializeTimeSystem(client) {
-  try {
-    logger.info("Initializing time system...");
-    
-    // Check if the user_timezones table exists
-    const { error: timezoneCheckError } = await supabase
-      .from('user_timezones')
-      .select('user_id')
-      .limit(1);
+    try {
+      logger.info("Initializing time system...");
       
-    // Create timezone table if it doesn't exist
-    if (timezoneCheckError && timezoneCheckError.code === '42P01') {
-      logger.info("The 'user_timezones' table doesn't exist. You need to create it manually.");
-    } else {
-        logger.info("The user_timezone table exists.");
-    }
-    
-    // Check if the bri_events table exists
-    const { error: eventsCheckError } = await supabase
-      .from('bri_events')
-      .select('id')
-      .limit(1);
+      // Store client reference separately, don't modify global state
+      if (client) {
+        discordClientRef = client;
+        logger.info("Discord client reference stored in timeSystem");
+      }
       
-    // Create events table if it doesn't exist
-    if (eventsCheckError && eventsCheckError.code === '42P01') {
-      logger.info("The 'bri_events' table doesn't exist. You need to create it manually.");
-    } else {
-        logger.info("The bri_events table exists.");
-    }
-    
-    // Check if the bri_scheduled_messages table exists
-    const { error: scheduledCheckError } = await supabase
-      .from('bri_scheduled_messages')
-      .select('id')
-      .limit(1);
+      // Check if the user_timezones table exists
+      const { error: timezoneCheckError } = await supabase
+        .from('user_timezones')
+        .select('user_id')
+        .limit(1);
+        
+      // Create timezone table if it doesn't exist
+      if (timezoneCheckError && timezoneCheckError.code === '42P01') {
+        logger.info("The 'user_timezones' table doesn't exist.");
+      } else {
+          logger.info("The user_timezones table exists.");
+      }
       
-    // Create scheduled messages table if it doesn't exist
-    if (scheduledCheckError && scheduledCheckError.code === '42P01') {
-      logger.info("The 'bri_scheduled_messages' table doesn't exist. You need to create it manually.");
-    } else {
-        logger.info("The bri_scheduled_messages table exists.");
+      // Check if the bri_events table exists
+      const { error: eventsCheckError } = await supabase
+        .from('bri_events')
+        .select('id')
+        .limit(1);
+        
+      // Create events table if it doesn't exist
+      if (eventsCheckError && eventsCheckError.code === '42P01') {
+        logger.info("The 'bri_events' table doesn't exist.");
+      } else {
+          logger.info("The bri_events table exists.");
+      }
+      
+      // Check if the bri_scheduled_messages table exists
+      const { error: scheduledCheckError } = await supabase
+        .from('bri_scheduled_messages')
+        .select('id')
+        .limit(1);
+        
+      // Create scheduled messages table if it doesn't exist
+      if (scheduledCheckError && scheduledCheckError.code === '42P01') {
+        logger.info("The 'bri_scheduled_messages' table doesn't exist.");
+      } else {
+          logger.info("The bri_scheduled_messages table exists.");
+      }
+      
+      logger.info("Time system initialization complete.");
+    } catch (error) {
+      logger.error("Error initializing time system:", error);
+      throw error;
     }
-    
-    logger.info("Time system initialization complete.");
-  } catch (error) {
-    logger.error("Error initializing time system:", error);
-    throw error;
   }
-}
 
 /**
  * Gets a user's timezone
@@ -830,7 +852,7 @@ function parseCustomDate(dateText, timeText, timezone) {
  */
 export async function processTimeAwareEvents() {
   try {
-    logger.info("Processing time-aware events...");
+    //logger.info("Processing time-aware events...");
     
     // Step 1: Process event reminders
     await processEventReminders();
@@ -841,7 +863,7 @@ export async function processTimeAwareEvents() {
     // Step 3: Process event follow-ups (for events that just ended)
     await processEventFollowUps();
     
-    logger.info("Finished processing time-aware events");
+    //logger.info("Finished processing time-aware events");
   } catch (error) {
     logger.error("Error in processTimeAwareEvents:", error);
   }
@@ -1053,9 +1075,15 @@ Don't add any emoji at the beginning or end of the message.
  */
 async function sendReminderMessage(userId, message, channelId = null) {
   try {
+    // Check if client is available
+    if (!discordClientRef) {
+        logger.error(`No Discord client available for sending reminder to user ${userId}`);
+        return;
+      }
+
     if (channelId) {
       // Send to specified channel
-      const channel = await client.channels.fetch(channelId);
+      const channel = await discordClientRef.channels.fetch(channelId);
       if (channel) {
         await channel.send(`<@${userId}> ${message}`);
         return;
@@ -1064,13 +1092,13 @@ async function sendReminderMessage(userId, message, channelId = null) {
     
     // If no channel specified or channel not found, try to send DM
     try {
-      const user = await client.users.fetch(userId);
+      const user = await discordClientRef.users.fetch(userId);
       await user.send(message);
     } catch (dmError) {
       logger.error(`Error sending DM to user ${userId}:`, dmError);
       
       // If DM fails, try to find a common guild and send there
-      const guilds = client.guilds.cache.filter(guild => 
+      const guilds = discordClientRef.guilds.cache.filter(guild => 
         guild.members.cache.has(userId) || 
         guild.members.resolve(userId)
       );
@@ -1110,8 +1138,13 @@ async function sendReminderMessage(userId, message, channelId = null) {
  */
 async function sendScheduledMessage(scheduledMessage) {
   try {
+    // Check if client is available
+    if (!discordClientRef) {
+        logger.error(`No Discord client available for scheduled message ${scheduledMessage.id}`);
+        return;
+    }    
     // Get the channel
-    const channel = await client.channels.fetch(scheduledMessage.channel_id);
+    const channel = await discordClientRef.channels.fetch(scheduledMessage.channel_id);
     
     if (!channel) {
       logger.error(`Channel not found for scheduled message ${scheduledMessage.id}: ${scheduledMessage.channel_id}`);
@@ -1136,10 +1169,14 @@ let timeEventInterval = null;
  * @param {number} intervalMinutes - Check interval in minutes
  */
 export function startTimeEventProcessing(client, intervalMinutes = 1) {
-  // Stop any existing interval
-  if (timeEventInterval) {
-    clearInterval(timeEventInterval);
-  }
+    if (client) {
+        discordClientRef = client;
+        logger.info("Discord client reference stored in timeSystem");
+      }
+    // Stop any existing interval
+    if (timeEventInterval) {
+        clearInterval(timeEventInterval);
+    }
   
   // Convert minutes to milliseconds
   const intervalMs = intervalMinutes * 60 * 1000;
@@ -1158,3 +1195,85 @@ export function startTimeEventProcessing(client, intervalMinutes = 1) {
     logger.error("Error in initial time event processing:", error);
   });
 }
+
+/**
+ * Cancels a scheduled message by setting it inactive
+ * @param {number} messageId - Scheduled message ID
+ * @returns {Promise<boolean>} - Success status
+ */
+export async function cancelScheduledMessage(messageId) {
+    try {
+      const { error } = await supabase
+        .from('bri_scheduled_messages')
+        .update({
+          is_active: false
+        })
+        .eq('id', messageId);
+        
+      if (error) {
+        logger.error(`Error canceling scheduled message ${messageId}:`, error);
+        return false;
+      }
+      
+      logger.info(`Canceled scheduled message ${messageId}`);
+      return true;
+    } catch (error) {
+      logger.error(`Error in cancelScheduledMessage for message ${messageId}:`, error);
+      return false;
+    }
+  }
+
+  /**
+ * Gets active scheduled messages for a guild
+ * @param {string} guildId - Guild ID (optional, if provided will filter by channels in this guild)
+ * @returns {Promise<Array>} - Active scheduled messages
+ */
+export async function getActiveScheduledMessages(guildId = null) {
+    try {
+        // Check if we have a client reference
+        if (!discordClientRef && guildId) {
+            logger.error(`No Discord client available for getting scheduled messages`);
+            return [];
+        }
+      // Build query for active messages
+      let query = supabase
+        .from('bri_scheduled_messages')
+        .select('*')
+        .eq('is_active', true)
+        .order('created_at', { ascending: false });
+      
+      // Get the data
+      const { data, error } = await query;
+        
+      if (error) {
+        logger.error("Error fetching scheduled messages:", error);
+        return [];
+      }
+      
+      if (!data || data.length === 0) {
+        return [];
+      }
+      
+      // If guildId is provided, filter messages by channels in this guild
+      if (guildId && discordClientRef) {
+        try {
+          const guild = await discordClientRef.guilds.fetch(guildId);
+          if (guild) {
+            // Get all channel IDs for this guild
+            const guildChannelIds = Array.from(guild.channels.cache.keys());
+            
+            // Filter messages to only include those for channels in this guild
+            return data.filter(msg => guildChannelIds.includes(msg.channel_id));
+          }
+        } catch (guildError) {
+          logger.error(`Error filtering messages for guild ${guildId}:`, guildError);
+          // Fall back to returning all messages if we can't filter
+        }
+      }
+      
+      return data;
+    } catch (error) {
+      logger.error("Error in getActiveScheduledMessages:", error);
+      return [];
+    }
+  }

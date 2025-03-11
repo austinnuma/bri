@@ -50,9 +50,9 @@ let ffprobePath = findExecutablePath('ffprobe');
 let ytDlpPath = findExecutablePath('yt-dlp');
 
 // Log the found paths
-logger.info(`FFmpeg absolute path: ${ffmpegPath || 'Not found'}`);
-logger.info(`FFprobe absolute path: ${ffprobePath || 'Not found'}`);
-logger.info(`yt-dlp absolute path: ${ytDlpPath || 'Not found'}`);
+//logger.info(`FFmpeg absolute path: ${ffmpegPath || 'Not found'}`);
+//logger.info(`FFprobe absolute path: ${ffprobePath || 'Not found'}`);
+//logger.info(`yt-dlp absolute path: ${ytDlpPath || 'Not found'}`);
 
 export const data = new SlashCommandBuilder()
     .setName('ytaudio')
