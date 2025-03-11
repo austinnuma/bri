@@ -105,22 +105,24 @@ function withTimeout(fn, timeout = QUERY_TIMEOUT) {
 
 
 /**
- * Generate a cache key for query parameters
+ * Generate a cache key for query parameters with guild ID
  * @param {string} table - Table name
  * @param {Object} params - Query parameters
+ * @param {string} guildId - Guild ID
  * @returns {string} - Cache key
  */
-function generateCacheKey(table, params) {
-  return `${table}:${JSON.stringify(params)}`;
+function generateCacheKey(table, params, guildId) {
+  return `${table}:${guildId}:${JSON.stringify(params)}`;
 }
 
 /**
  * Get user data with caching
  * @param {string} userId - User ID
+ * @param {string} guildId - Guild ID
  * @returns {Promise<Object>} - User data
  */
-export async function getCachedUser(userId) {
-  const cacheKey = `user:${userId}`;
+export async function getCachedUser(userId, guildId) {
+  const cacheKey = `user:${userId}:${guildId}`;
   
   // Check cache first
   const cached = userCache.get(cacheKey);
@@ -132,10 +134,11 @@ export async function getCachedUser(userId) {
       .from('user_conversations')
       .select('system_prompt, context_length, personality_preferences, conversation')
       .eq('user_id', userId)
+      .eq('guild_id', guildId)
       .single();
       
     if (error) {
-      logger.error(`Error fetching user data for ${userId}:`, error);
+      logger.error(`Error fetching user data for ${userId} in guild ${guildId}:`, error);
       throw error;
     }
     
@@ -144,7 +147,7 @@ export async function getCachedUser(userId) {
     
     return data;
   } catch (error) {
-    logger.error(`Error in getCachedUser for ${userId}:`, error);
+    logger.error(`Error in getCachedUser for ${userId} in guild ${guildId}:`, error);
     throw error;
   }
 }
@@ -152,11 +155,12 @@ export async function getCachedUser(userId) {
 /**
  * Get user memories with caching
  * @param {string} userId - User ID
+ * @param {string} guildId - Guild ID
  * @param {Object} filters - Optional query filters
  * @returns {Promise<Array>} - User memories
  */
-export async function getCachedMemories(userId, filters = {}) {
-  const cacheKey = `memories:${userId}:${JSON.stringify(filters)}`;
+export async function getCachedMemories(userId, guildId, filters = {}) {
+  const cacheKey = `memories:${userId}:${guildId}:${JSON.stringify(filters)}`;
   
   // Check cache first
   const cached = memoryCache.get(cacheKey);
@@ -167,7 +171,8 @@ export async function getCachedMemories(userId, filters = {}) {
     let query = supabase
       .from('unified_memories')
       .select('*')
-      .eq('user_id', userId);
+      .eq('user_id', userId)
+      .eq('guild_id', guildId);
       
     // Apply filters if provided
     if (filters.type) {
@@ -186,7 +191,7 @@ export async function getCachedMemories(userId, filters = {}) {
     const { data, error } = await query;
       
     if (error) {
-      logger.error(`Error fetching memories for ${userId}:`, error);
+      logger.error(`Error fetching memories for ${userId} in guild ${guildId}:`, error);
       throw error;
     }
     
@@ -195,7 +200,7 @@ export async function getCachedMemories(userId, filters = {}) {
     
     return data;
   } catch (error) {
-    logger.error(`Error in getCachedMemories for ${userId}:`, error);
+    logger.error(`Error in getCachedMemories for ${userId} in guild ${guildId}:`, error);
     throw error;
   }
 }
@@ -204,17 +209,18 @@ export async function getCachedMemories(userId, filters = {}) {
  * Execute a generic cached query
  * @param {string} table - Table name
  * @param {Object} params - Query parameters
+ * @param {string} guildId - Guild ID
  * @param {boolean} skipCache - Whether to skip cache
  * @returns {Promise<Array>} - Query results
  */
-export async function cachedQuery(table, params, skipCache = false) {
-  const cacheKey = generateCacheKey(table, params);
+export async function cachedQuery(table, params, guildId, skipCache = false) {
+  const cacheKey = generateCacheKey(table, params, guildId);
     
   // Ensure this isn't being used for RPC calls
-    if (table === 'rpc') {
-        logger.warn("cachedQuery should not be used for RPC calls. Use specific RPC functions instead.");
-        throw new Error("Use cachedVectorSearch for RPC calls");
-      }
+  if (table === 'rpc') {
+    logger.warn("cachedQuery should not be used for RPC calls. Use specific RPC functions instead.");
+    throw new Error("Use cachedVectorSearch for RPC calls");
+  }
   
   // Check cache first unless skipping
   if (!skipCache) {
@@ -226,13 +232,17 @@ export async function cachedQuery(table, params, skipCache = false) {
   try {
     let query = supabase.from(table).select(params.select || '*');
     
-    // Apply filters
+    // Apply guild filter for tables that support it
+    if (table !== 'bot_settings') { // Skip for global settings
+      query = query.eq('guild_id', guildId);
+    }
+    
+    // Apply other filters
     if (params.eq) {
       for (const [column, value] of Object.entries(params.eq)) {
         query = query.eq(column, value);
       }
     }
-    
     if (params.neq) {
       for (const [column, value] of Object.entries(params.neq)) {
         query = query.neq(column, value);
@@ -263,12 +273,12 @@ export async function cachedQuery(table, params, skipCache = false) {
       throw error;
     }
     
-    // Cache the result
+    // Cache the result with guild-specific key
     queryCache.set(cacheKey, data);
     
     return data;
   } catch (error) {
-    logger.error(`Error in cachedQuery for ${table}:`, error);
+    logger.error(`Error in cachedQuery for ${table} in guild ${guildId}:`, error);
     throw error;
   }
 }
@@ -276,26 +286,50 @@ export async function cachedQuery(table, params, skipCache = false) {
 /**
  * Invalidate cache entries related to a user
  * @param {string} userId - User ID
+ * @param {string} guildId - Guild ID
  */
-export function invalidateUserCache(userId) {
-  // Clear specific user cache
-  userCache.delete(`user:${userId}`);
-  
-  // Clear memory caches for this user
-  for (const key of memoryCache.keys) {
-    if (key.startsWith(`memories:${userId}`)) {
-      memoryCache.delete(key);
+export function invalidateUserCache(userId, guildId = null) {
+  if (guildId) {
+    // Invalidate specific user+guild cache
+    userCache.delete(`user:${userId}:${guildId}`);
+    
+    // Clear memory caches for this user in this guild
+    for (const key of memoryCache.keys) {
+      if (key.startsWith(`memories:${userId}:${guildId}`)) {
+        memoryCache.delete(key);
+      }
     }
-  }
-  
-  // Clear related query caches
-  for (const key of queryCache.keys) {
-    if (key.includes(userId)) {
-      queryCache.delete(key);
+    
+    // Clear related query caches
+    for (const key of queryCache.keys) {
+      if (key.includes(userId) && key.includes(guildId)) {
+        queryCache.delete(key);
+      }
     }
+    
+    logger.debug(`Invalidated cache for user ${userId} in guild ${guildId}`);
+  } else {
+    // Invalidate all caches for this user across all guilds
+    for (const key of userCache.keys) {
+      if (key.startsWith(`user:${userId}:`)) {
+        userCache.delete(key);
+      }
+    }
+    
+    for (const key of memoryCache.keys) {
+      if (key.startsWith(`memories:${userId}:`)) {
+        memoryCache.delete(key);
+      }
+    }
+    
+    for (const key of queryCache.keys) {
+      if (key.includes(userId)) {
+        queryCache.delete(key);
+      }
+    }
+    
+    logger.debug(`Invalidated all caches for user ${userId} across all guilds`);
   }
-  
-  logger.debug(`Invalidated cache for user ${userId}`);
 }
 
 /**
@@ -377,34 +411,52 @@ export function withCacheInvalidation(dbOperation, table, affectedUsers = null) 
  * @returns {Promise<Array>} - Matching memories
  */
 export async function cachedVectorSearch(userId, embedding, options = {}) {
-    const { 
-      threshold = 0.6, 
-      limit = 5, 
-      memoryType = null, 
-      category = null 
-    } = options;
-    
-    // Create a simplified cache key (don't include the full embedding vector as it's too large)
-    const cacheKey = `vector:${userId}:${limit}:${memoryType || 'any'}:${category || 'any'}:${threshold}`;
-    
-    // Check cache
-    const cached = queryCache.get(cacheKey);
-    if (cached) return cached;
-    
+  const { 
+    threshold = 0.6, 
+    limit = 5, 
+    memoryType = null, 
+    category = null,
+    guildId = null  // Add guild ID parameter
+  } = options;
+  
+  // Create a simplified cache key (don't include the full embedding vector as it's too large)
+  const cacheKey = `vector:${userId}:${guildId || 'any'}:${limit}:${memoryType || 'any'}:${category || 'any'}:${threshold}`;
+  
+  // Check cache
+  const cached = queryCache.get(cacheKey);
+  if (cached) return cached;
+  
   // Direct RPC call with timeout
   try {
     const data = await withTimeout(async () => {
-      const { data, error } = await supabase.rpc('match_unified_memories', {
-        p_user_id: userId,
-        p_query_embedding: embedding,
-        p_match_threshold: threshold,
-        p_match_count: limit,
-        p_memory_type: memoryType,
-        p_category: category
-      });
-      
-      if (error) throw error;
-      return data || [];
+      // Use the multi-server RPC if guild ID is provided
+      if (guildId) {
+        const { data, error } = await supabase.rpc('match_unified_memories_multi_server', {
+          p_user_id: userId,
+          p_guild_id: guildId,
+          p_query_embedding: embedding,
+          p_match_threshold: threshold,
+          p_match_count: limit,
+          p_memory_type: memoryType,
+          p_category: category
+        });
+        
+        if (error) throw error;
+        return data || [];
+      } else {
+        // Use the original single-server RPC for backward compatibility
+        const { data, error } = await supabase.rpc('match_unified_memories', {
+          p_user_id: userId,
+          p_query_embedding: embedding,
+          p_match_threshold: threshold,
+          p_match_count: limit,
+          p_memory_type: memoryType,
+          p_category: category
+        });
+        
+        if (error) throw error;
+        return data || [];
+      }
     });
     
     // Cache the result
@@ -412,11 +464,11 @@ export async function cachedVectorSearch(userId, embedding, options = {}) {
     
     return data;
   } catch (error) {
-    logger.error(`Error in cachedVectorSearch for ${userId}:`, error);
+    logger.error(`Error in cachedVectorSearch for ${userId} in guild ${guildId || 'any'}:`, error);
     
     // If timeout, return empty array rather than hanging
     if (error.message === "Database query timeout") {
-      logger.warn(`Vector search timed out for user ${userId}`);
+      logger.warn(`Vector search timed out for user ${userId} in guild ${guildId || 'any'}`);
       return [];
     }
     
@@ -428,18 +480,19 @@ export async function cachedVectorSearch(userId, embedding, options = {}) {
 /**
  * Warm up cache for a specific user
  * @param {string} userId - User ID
+ * @param {string} guildId - Guild ID
  */
-export async function warmupUserCache(userId) {
-    try {
-      // Fetch user data
-      await getCachedUser(userId);
-      
-      // Fetch commonly accessed memory types
-      await getCachedMemories(userId);
-      await getCachedMemories(userId, { type: 'explicit'});
-      
-      logger.debug(`Warmed up cache for user ${userId}`);
-    } catch (error) {
-      logger.error(`Error warming up cache for user ${userId}:`, error);
-    }
+export async function warmupUserCache(userId, guildId) {
+  try {
+    // Fetch user data
+    await getCachedUser(userId, guildId);
+    
+    // Fetch commonly accessed memory types
+    await getCachedMemories(userId, guildId);
+    await getCachedMemories(userId, guildId, { type: 'explicit'});
+    
+    logger.debug(`Warmed up cache for user ${userId} in guild ${guildId}`);
+  } catch (error) {
+    logger.error(`Error warming up cache for user ${userId} in guild ${guildId}:`, error);
+  }
 }

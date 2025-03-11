@@ -9,7 +9,7 @@ import { logger } from './logger.js';
  */
 function isQuotableMessage(message) {
     // Don't quote bot messages
-    if (message.author.bot) return false;
+    //if (message.author.bot) return false;
     
     // Message should have content
     if (!message.content || message.content.trim() === '') return false;

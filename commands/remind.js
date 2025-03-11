@@ -78,7 +78,8 @@ export async function execute(interaction) {
             description: `Reminder set by ${interaction.user.tag} on ${new Date().toLocaleDateString()}`,
             event_date: parsedDate.toISOString(),
             reminder_minutes: reminderMinutes,
-            channel_id: interaction.channelId // Store the channel where the reminder was set
+            channel_id: interaction.channelId, // Store the channel where the reminder was set
+            guild_id: interaction.guildId // Store the guild where the reminder was set
         });
         
         if (!event) {

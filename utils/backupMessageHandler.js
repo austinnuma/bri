@@ -1,6 +1,3 @@
-// Complete multi-server messageHandler.js
-// (This is the full implementation - replace your current file with this)
-
 import { 
   getEffectiveSystemPrompt, 
   getCombinedSystemPromptWithMemories, 
@@ -33,17 +30,18 @@ import { getEmbedding } from './improvedEmbeddings.js';
 import natural from 'natural';
 import { getServerConfig, getServerPrefix, isFeatureEnabled } from './serverConfigManager.js';
 
+
 const { userConversations, userContextLengths, userDynamicPrompts } = memoryManagerState;
 
 const SUMMARY_THRESHOLD = 3;
 const INACTIVITY_THRESHOLD = 8 * 60 * 60 * 1000; // 8 hours
 
-// Track user activity times (now with guild context)
+// Track user activity times
 const userLastActive = new Map();
 
-// We'll store the last summary timestamp per user (now with guild context)
+// We'll store the last summary timestamp per user in memory.
 const lastSummaryTimestamps = new Map();
-// Track new messages since last extraction (now with guild context)
+// Track new messages since last extraction
 const userMessageCounters = new Map();
 
 function normalizeForComparison(text) {
@@ -53,24 +51,23 @@ function normalizeForComparison(text) {
     .trim();
 }
 
+
 /**
  * Checks if a memory text is similar to any existing memory for a user
  * @param {string} userId - User ID
  * @param {string} memoryText - Memory text to check
- * @param {string} guildId - Guild ID
  * @returns {Promise<boolean>} - Whether a similar memory exists
  */
-async function isDuplicateMemory(userId, memoryText, guildId) {
+async function isDuplicateMemory(userId, memoryText) {
   try {
     // First, extract the category to only compare within the same type of memory
     const category = categorizeMemory(memoryText);
     
-    // Get existing memories in this category (now with guild filter)
+    // Get existing memories in this category
     const { data, error } = await supabase
       .from('unified_memories')
       .select('memory_text')
       .eq('user_id', userId)
-      .eq('guild_id', guildId)
       .eq('category', category)
       .eq('active', true);
       
@@ -90,7 +87,7 @@ async function isDuplicateMemory(userId, memoryText, guildId) {
       
       // Use a higher threshold (0.92+) for true duplicates
       if (similarity > 0.92) {
-        logger.info(`Found similar memory in guild ${guildId}: "${memory.memory_text}" vs "${memoryText}" (similarity: ${similarity.toFixed(3)})`);
+        logger.info(`Found similar memory: "${memory.memory_text}" vs "${memoryText}" (similarity: ${similarity.toFixed(3)})`);
         return true;
       }
     }
@@ -102,6 +99,7 @@ async function isDuplicateMemory(userId, memoryText, guildId) {
     return false; // When in doubt, don't block the insertion
   }
 }
+
 
 /**
  * Checks if an attachment is an image
@@ -118,14 +116,8 @@ function isImageAttachment(attachment) {
   return isImage || hasImageContentType;
 }
 
-/**
- * Handle image attachments with guild context
- * @param {Message} message - The Discord message
- * @param {string} cleanedContent - The cleaned message content
- * @param {string} guildId - The guild ID
- * @returns {Promise<boolean>} - Whether images were handled
- */
-async function handleImageAttachments(message, cleanedContent, guildId) {
+
+async function handleImageAttachments(message, cleanedContent) {
   // Extract all image attachments
   const imageAttachments = message.attachments.filter(isImageAttachment);
   
@@ -133,7 +125,7 @@ async function handleImageAttachments(message, cleanedContent, guildId) {
     return false; // No images to process
   }
   
-  logger.info(`Processing ${imageAttachments.size} images from user ${message.author.id} in guild ${guildId}`);
+  logger.info(`Processing ${imageAttachments.size} images from user ${message.author.id}`);
   await message.channel.sendTyping();
   
   try {
@@ -141,7 +133,7 @@ async function handleImageAttachments(message, cleanedContent, guildId) {
     const imageUrls = imageAttachments.map(attachment => attachment.url);
     
     // Get conversation history for this user to provide context
-    const conversationHistory = userConversations.get(`${message.author.id}:${guildId}`) || [];
+    const conversationHistory = userConversations.get(message.author.id) || [];
     
     // Use the enhanced analyzeImages function with conversation context
     const imageDescription = await analyzeImages(
@@ -170,28 +162,27 @@ async function handleImageAttachments(message, cleanedContent, guildId) {
       });
       
       // Apply context length limits if needed
-      const contextLength = userContextLengths.get(`${message.author.id}:${guildId}`) || defaultContextLength;
+      const contextLength = userContextLengths.get(message.author.id) || defaultContextLength;
       if (conversationHistory.length > contextLength) {
         conversationHistory = [conversationHistory[0], ...conversationHistory.slice(-(contextLength - 1))];
       }
       
       // Save the updated conversation
-      userConversations.set(`${message.author.id}:${guildId}`, conversationHistory);
+      userConversations.set(message.author.id, conversationHistory);
       
-      // Save to database with guild ID
+      // Save to database
       await supabase.from('user_conversations').upsert({
         user_id: message.author.id,
-        guild_id: guildId,
         conversation: conversationHistory,
-        system_prompt: STATIC_CORE_PROMPT + "\n" + (userDynamicPrompts.get(`${message.author.id}:${guildId}`) || ""),
-        context_length: userContextLengths.get(`${message.author.id}:${guildId}`) || defaultContextLength,
+        system_prompt: STATIC_CORE_PROMPT + "\n" + (userDynamicPrompts.get(message.author.id) || ""),
+        context_length: userContextLengths.get(message.author.id) || defaultContextLength,
         updated_at: new Date().toISOString(),
       });
       
-      invalidateUserCache(message.author.id, guildId);
+      invalidateUserCache(message.author.id);
     }
     
-    logger.info(`Successfully processed images for user ${message.author.id} in guild ${guildId}`);
+    logger.info(`Successfully processed images for user ${message.author.id}`);
     return true; // Images were processed
   } catch (error) {
     logger.error("Error processing images:", error);
@@ -199,6 +190,7 @@ async function handleImageAttachments(message, cleanedContent, guildId) {
     return true; // Error, but still handled the images
   }
 }
+
 
 /**
  * Handles legacy (non-slash) messages.
@@ -209,36 +201,34 @@ async function handleImageAttachments(message, cleanedContent, guildId) {
 export async function handleLegacyMessage(message) {
   // Skip bot messages
   if (message.author.bot) return;
-  
-  // Skip if no guild (DMs)
+  // Skip DMs (optional, you might want to support DMs too)
   if (!message.guild) return;
-  
-  // Get guild ID for multi-server support
+  // Get the guild ID for multi-server support
   const guildId = message.guild.id;
-  
   // Get server configuration
   const serverConfig = await getServerConfig(guildId);
   const serverPrefix = serverConfig.prefix || 'bri';
   
-  // Track user activity with guild context
-  const userGuildKey = `${message.author.id}:${guildId}`;
-  const lastInteraction = userLastActive.get(userGuildKey) || 0;
+  const lastInteraction = userLastActive.get(message.author.id) || 0;
   const now = Date.now();
-  
   // If user was inactive for more than 10 minutes, refresh their cache
   if (now - lastInteraction > 10 * 60 * 1000) {
     await warmupUserCache(message.author.id, guildId);
   }
 
   // Update last active timestamp
-  userLastActive.set(userGuildKey, now);
+  userLastActive.set(message.author.id, now);
 
+  ///logger.info(`Processing message: "${message.content}", attachments: ${message.attachments.size}`);
+
+  // Check if this channel is designated for Bri in this server
   const isDesignated = serverConfig.designated_channels.includes(message.channel.id);
   let cleanedContent = message.content;
   
-  // Check for attached images and store the result
-  const imageAttachments = message.attachments.filter(isImageAttachment);
-  
+    // Check for attached images and store the result
+    const imageAttachments = message.attachments.filter(isImageAttachment);
+    //logger.info(`Found ${imageAttachments.size} image attachments`);
+    
   // Check if this is a non-designated channel
   if (!isDesignated) {
     // Build the prefix regex based on server configuration
@@ -246,8 +236,8 @@ export async function handleLegacyMessage(message) {
     
     // Check if this is a reply to the bot's message
     const isReplyToBot = message.reference && 
-                          message.reference.messageId && 
-                          (await message.channel.messages.fetch(message.reference.messageId))?.author.id === message.client.user.id;
+                         message.reference.messageId && 
+                         (await message.channel.messages.fetch(message.reference.messageId))?.author.id === message.client.user.id;
     
     // Only proceed in three cases:
     // 1. Message has the server-specific prefix, or
@@ -265,23 +255,32 @@ export async function handleLegacyMessage(message) {
       cleanedContent = message.content.replace(prefixRegex, '').trim();
     }
   }
+
+  // Check if the memory feature is enabled for this server
+  const memoryEnabled = await isFeatureEnabled(guildId, 'memory');
   
-  // Handle image analysis if feature is enabled
-  if (imageAttachments.size > 0 && await isFeatureEnabled(guildId, 'character')) {
-    const imagesHandled = await handleImageAttachments(message, cleanedContent, guildId);
-    if (imagesHandled) {
-      return; // Exit early if we handled images
+  // Handle image analysis
+  if (imageAttachments.size > 0) {
+    // Only process images if the feature is enabled
+    if (await isFeatureEnabled(guildId, 'character')) {
+      const imagesHandled = await handleImageAttachments(message, cleanedContent, guildId);
+      if (imagesHandled) {
+        return; // Exit early if we handled images
+      }
+    } else {
+      // Feature disabled message
+      await message.reply("Image analysis is currently disabled on this server.");
+      return;
     }
   }
 
-  // Memory command check - only if memory feature is enabled
-  const memoryEnabled = await isFeatureEnabled(guildId, 'memory');
+  // Memory command check
   const memoryRegex = /^(?:can you\s+)?remember\s+(.*)/i;
   const memoryMatch = cleanedContent.match(memoryRegex);
-  
   if (memoryMatch && memoryEnabled) {
     const memoryText = memoryMatch[1].trim();
     try {
+      // Pass guildId to memory commands
       const result = await processMemoryCommand(message.author.id, memoryText, guildId);
       await message.channel.send(result.success ? result.message : result.error);
     } catch (error) {
@@ -295,24 +294,27 @@ export async function handleLegacyMessage(message) {
     return;
   }
 
-  // Update relationship after each interaction - only if character feature is enabled
+  // Additional checks for other features
   if (await isFeatureEnabled(guildId, 'character')) {
+    // Update relationship after each interaction (now with guildId)
     updateRelationshipAfterInteraction(message.author.id, cleanedContent, guildId).catch(error => {
       logger.error("Error updating relationship:", error);
-      // Don't stop message processing for relationship errors
     });
   }
 
-  // Try to auto-save this as a quote - only if quotes feature is enabled
   if (await isFeatureEnabled(guildId, 'quotes')) {
+    // Try to auto-save this as a quote (now with guildId)
     maybeAutoSaveQuote(message, message.client.user.id, guildId).catch(error => {
       logger.error("Error in auto quote save:", error);
-      // Don't stop message processing for quote errors
     });
   }
 
   // Handle regular text messages
+  // Get conversation history with guild context
+  // First, get the system prompt - now with guild context
   const effectiveSystemPrompt = getEffectiveSystemPrompt(message.author.id, guildId);
+  
+  // Combine with memories, respecting the new guild context
   const combinedSystemPrompt = await getCombinedSystemPromptWithMemories(
     message.author.id, 
     effectiveSystemPrompt, 
@@ -320,7 +322,7 @@ export async function handleLegacyMessage(message) {
     guildId
   );
 
-  // Get conversation with guild context
+  // Add guild ID to conversation retrieval
   let conversation = userConversations.get(`${message.author.id}:${guildId}`) || [
     { role: "system", content: combinedSystemPrompt }
   ];
@@ -333,22 +335,20 @@ export async function handleLegacyMessage(message) {
     conversation = [conversation[0], ...conversation.slice(-(contextLength - 1))];
   }
   
+  // Store with guild ID in the key
   userConversations.set(`${message.author.id}:${guildId}`, conversation);
 
   await message.channel.sendTyping();
 
   try {
-    // Find relevant content to potentially share with this user - only if character feature is enabled
-    const characterEnabled = await isFeatureEnabled(guildId, 'character');
-    const relevantContent = characterEnabled 
-      ? await findRelevantContentToShare(message.author.id, cleanedContent, guildId) 
-      : null;
-    
+    // Find relevant content to potentially share with this user
+    const relevantContent = await findRelevantContentToShare(message.author.id, cleanedContent);
     let personalContent = '';
+        
     if (relevantContent) {
-      personalContent = await getPersonalContent(message.author.id, relevantContent, guildId);
+      personalContent = await getPersonalContent(message.author.id, relevantContent);
     }
-    
+        
     // If there's personal content to share, add it to the system prompt
     if (personalContent) {
       // Add Bri's personal content to the prompt
@@ -367,80 +367,68 @@ export async function handleLegacyMessage(message) {
 
     let reply = completion.choices[0].message.content;
 
-    // Check for potential time-sensitive information - only if reminders feature is enabled
-    const remindersEnabled = await isFeatureEnabled(guildId, 'reminders');
-    if (remindersEnabled) {
-      const timeInfo = await checkForTimeRelatedContent(cleanedContent, message.author.id, message.channel.id, guildId);
-      
-      if (timeInfo && timeInfo.shouldAsk) {
-        // If time-sensitive info was found, modify Bri's response to acknowledge it
-        reply += `\n\n${timeInfo.followUpQuestion}`;
-      }
+    // Check for potential time-sensitive information in the user's message
+    const timeInfo = await checkForTimeRelatedContent(cleanedContent, message.author.id, message.channel.id);
+  
+    if (timeInfo && timeInfo.shouldAsk) {
+      // If time-sensitive info was found, modify Bri's response to acknowledge it
+      reply += `\n\n${timeInfo.followUpQuestion}`;
     }
 
-    // Check for potential inside jokes - only if character feature is enabled
-    if (characterEnabled) {
-      detectAndStoreInsideJoke(message.author.id, cleanedContent, guildId).catch(error => {
-        logger.error("Error detecting inside joke:", error);
-      });
-      
-      // Personalize response based on relationship
-      reply = await personalizeResponse(message.author.id, reply, guildId);
-    }
+    // Check for potential inside jokes
+    detectAndStoreInsideJoke(message.author.id, cleanedContent).catch(error => {
+      logger.error("Error detecting inside joke:", error);
+    });
+    
+    // Personalize response based on relationship
+    reply = await personalizeResponse(message.author.id, reply);
 
-    // Apply emoticons
+     // Apply emoticons
     reply = replaceEmoticons(reply);
 
     // Update conversation with Bri's response
-    conversation.push({ role: "assistant", content: reply });
-    userConversations.set(`${message.author.id}:${guildId}`, conversation);
-
-    // Save conversation to database with guild ID
+    // When storing to database, include the guild ID
     await supabase.from('user_conversations').upsert({
       user_id: message.author.id,
-      guild_id: guildId,
+      guild_id: guildId, // Add this line
       conversation,
       system_prompt: STATIC_CORE_PROMPT + "\n" + (userDynamicPrompts.get(`${message.author.id}:${guildId}`) || ""),
       context_length: userContextLengths.get(`${message.author.id}:${guildId}`) || defaultContextLength,
       updated_at: new Date().toISOString(),
     });
     
+    // Update mapping with guild ID context
     invalidateUserCache(message.author.id, guildId);
-
-    // Update username mapping if needed
+    
+    // Update user mapping to include guild ID
     updateUserMapping(message).catch(err => {
       logger.error("Error updating user mapping", { error: err });
     });
 
-    // Memory extraction if memory feature is enabled
-    if (memoryEnabled) {
-      // Increment message counter for this user - now with guild context
-      const userGuildCounterKey = `${message.author.id}:${guildId}`;
-      const currentCount = userMessageCounters.get(userGuildCounterKey) || 0;
-      userMessageCounters.set(userGuildCounterKey, currentCount + 1);
+    // Increment message counter for this user
+    const currentCount = userMessageCounters.get(message.author.id) || 0;
+    userMessageCounters.set(message.author.id, currentCount + 1);
 
-      // Get timestamps - now with guild context
-      const lastSummaryTime = lastSummaryTimestamps.get(userGuildCounterKey) || 0;
-      const now = Date.now();
+    // Get timestamps
+    const lastSummaryTime = lastSummaryTimestamps.get(message.author.id) || 0;
+    const now = Date.now();
 
-      // Only trigger extraction if we have enough NEW messages or enough time has passed
-      if (userMessageCounters.get(userGuildCounterKey) >= SUMMARY_THRESHOLD || 
-          (now - lastSummaryTime) > INACTIVITY_THRESHOLD) {
-        
-        logger.info(`Triggering summarization for user ${message.author.id} in guild ${guildId} after ${userMessageCounters.get(userGuildCounterKey)} messages`);
-        
-        // Run summarization and extraction asynchronously to avoid blocking response
-        summarizeAndExtract(message.author.id, conversation, guildId).catch(err => {
-          logger.error(`Error in summarization/extraction process: ${err}`);
-        });
-        
-        // Reset counter and update timestamp immediately
-        userMessageCounters.set(userGuildCounterKey, 0);
-        lastSummaryTimestamps.set(userGuildCounterKey, now);
-      }
+    // Only trigger extraction if we have enough NEW messages or enough time has passed
+    if (userMessageCounters.get(message.author.id) >= SUMMARY_THRESHOLD || 
+        (now - lastSummaryTime) > INACTIVITY_THRESHOLD) {
+      
+      logger.info(`Triggering summarization for user ${message.author.id} after ${userMessageCounters.get(message.author.id)} messages`);
+      
+      // Run summarization and extraction asynchronously to avoid blocking response
+      summarizeAndExtract(message.author.id, conversation).catch(err => {
+        logger.error(`Error in summarization/extraction process: ${err}`);
+      });
+      
+      // Reset counter and update timestamp immediately
+      userMessageCounters.set(message.author.id, 0);
+      lastSummaryTimestamps.set(message.author.id, now);
     }
 
-    // Split and send the reply if needed
     if (reply.length > 2000) {
       const chunks = splitMessage(reply, 2000);
       for (const chunk of chunks) {
@@ -487,9 +475,8 @@ async function updateUserMapping(message) {
  * 
  * @param {string} userId - The user's ID
  * @param {Array} conversation - The conversation history
- * @param {string} guildId - The guild ID
  */
-async function summarizeAndExtract(userId, conversation, guildId) {
+async function summarizeAndExtract(userId, conversation) {
   try {
     // Create a copy of the conversation to avoid modification during processing
     const conversationCopy = [...conversation];
@@ -497,31 +484,29 @@ async function summarizeAndExtract(userId, conversation, guildId) {
     // Summarize the conversation
     const summary = await enhancedSummarizeConversation(conversationCopy);
     if (!summary) {
-      logger.warn(`Failed to generate summary for user ${userId} in guild ${guildId}`);
+      logger.warn(`Failed to generate summary for user ${userId}`);
       return;
     }
     
-    // Use the enhanced two-stage memory extraction
-    const extractedFacts = await enhancedMemoryExtraction(userId, conversationCopy, guildId);
+     // Use the enhanced two-stage memory extraction
+     const extractedFacts = await enhancedMemoryExtraction(userId, conversationCopy);
     
-    // Also analyze the conversation for interests after summarization - with guild context
-    analyzeConversationForInterests(userId, conversation, guildId).catch(err => {
+    // Also analyze the conversation for interests after summarization
+    analyzeConversationForInterests(userId, conversation).catch(err => {
       logger.error("Error analyzing summarized conversation for interests:", err);
     });
 
     // Skip DB operations if no new facts were extracted
     if (extractedFacts.length === 0) {
-      logger.info(`No new facts extracted for user ${userId} in guild ${guildId}`);
+      logger.info(`No new facts extracted for user ${userId}`);
       return;
     }
     
     // Insert memories with medium-high confidence
-    logger.info(`Extracted ${extractedFacts.length} new memories for user ${userId} in guild ${guildId}`);
-    
+    logger.info(`Extracted ${extractedFacts.length} new memories for user ${userId}`);
     // Process all facts as a batch
     const memoryObjects = extractedFacts.map(fact => ({
       user_id: userId,
-      guild_id: guildId,
       memory_text: fact,
       memory_type: 'intuited',
       category: categorizeMemory(fact),
@@ -547,7 +532,7 @@ async function summarizeAndExtract(userId, conversation, guildId) {
       if (duplicateIndices.has(i)) continue; // Skip if already marked as duplicate
       
       const memory = memoryObjects[i];
-      const isDuplicate = await isDuplicateMemory(userId, memory.memory_text, guildId);
+      const isDuplicate = await isDuplicateMemory(userId, memory.memory_text);
       
       if (!isDuplicate) {
         uniqueMemories.push(memory);
@@ -577,11 +562,11 @@ async function summarizeAndExtract(userId, conversation, guildId) {
     // Insert only unique memories
     if (uniqueMemories.length > 0) {
       try {
-        // Use onConflict strategy
+        // Use onConflict strategy (Solution 5)
         const { data, error } = await supabase
           .from('unified_memories')
           .insert(uniqueMemories, {
-            onConflict: 'user_id,guild_id,memory_text',
+            onConflict: 'user_id,memory_text', // Add this if your DB schema has a unique constraint
             ignoreDuplicates: true
           });
           
@@ -589,20 +574,20 @@ async function summarizeAndExtract(userId, conversation, guildId) {
           logger.error("Error batch inserting memories:", error);
           // Fall back to individual inserts if batch fails
           for (const memory of uniqueMemories) {
-            await insertIntuitedMemory(userId, memory.memory_text, 0.8, guildId);
+            await insertIntuitedMemory(userId, memory.memory_text);
           }
         } else {
-          logger.info(`Successfully inserted ${uniqueMemories.length} unique memories for user ${userId} in guild ${guildId}`);
+          logger.info(`Successfully inserted ${uniqueMemories.length} unique memories for user ${userId}`);
         }
       } catch (batchError) {
         logger.error("Error in batch memory insertion:", batchError);
         // Fall back to individual inserts
         for (const memory of uniqueMemories) {
-          await insertIntuitedMemory(userId, memory.memory_text, 0.8, guildId);
+          await insertIntuitedMemory(userId, memory.memory_text);
         }
       }
     } else {
-      logger.info(`No unique memories to insert for user ${userId} in guild ${guildId}`);
+      logger.info(`No unique memories to insert for user ${userId}`);
     }
   } catch (error) {
     logger.error(`Error in background summarization process: ${error}`);
@@ -614,10 +599,9 @@ async function summarizeAndExtract(userId, conversation, guildId) {
  * @param {string} content - Message content
  * @param {string} userId - User ID
  * @param {string} channelId - Channel ID
- * @param {string} guildId - Guild ID
  * @returns {Promise<Object|null>} - Time-related context info or null
  */
-async function checkForTimeRelatedContent(content, userId, channelId, guildId) {
+async function checkForTimeRelatedContent(content, userId, channelId) {
   try {
     // Don't process very short messages
     if (content.length < 10) return null;
@@ -629,7 +613,7 @@ async function checkForTimeRelatedContent(content, userId, channelId, guildId) {
     if (!eventInfo) return null;
     
     // Get the user's timezone
-    const timezone = await getUserTimezone(userId, guildId);
+    const timezone = await getUserTimezone(userId);
     
     // Check if this is a significant event that we should offer to remember
     const isSignificantEvent = isEventSignificant(eventInfo);
@@ -645,10 +629,10 @@ async function checkForTimeRelatedContent(content, userId, channelId, guildId) {
         eventInfo.title?.toLowerCase().includes('interview')) {
       
       // Create a follow-up event
-      await createFollowUpEvent(userId, eventInfo, channelId, guildId);
+      await createFollowUpEvent(userId, eventInfo, channelId);
       
       // Create a reminder for the actual event
-      await createReminderForEvent(userId, eventInfo, channelId, guildId);
+      await createReminderForEvent(userId, eventInfo, channelId);
       
       // Return a flag indicating we've handled this automatically
       return {
@@ -725,18 +709,16 @@ function generateFollowUpQuestion(eventInfo) {
  * @param {string} userId - User ID
  * @param {Object} eventInfo - Event information
  * @param {string} channelId - Channel ID
- * @param {string} guildId - Guild ID
  */
-async function createFollowUpEvent(userId, eventInfo, channelId, guildId) {
+async function createFollowUpEvent(userId, eventInfo, channelId) {
   try {
     // Schedule follow-up for 2 hours after the event
     const eventDate = new Date(`${eventInfo.date}T${eventInfo.time || '12:00'}`);
     const followUpDate = new Date(eventDate.getTime() + (2 * 60 * 60 * 1000));
     
-    // Create follow-up event with guild ID
+    // Create follow-up event
     await createEvent({
       user_id: userId,
-      guild_id: guildId,
       event_type: EVENT_TYPES.FOLLOW_UP,
       title: `Follow-up about ${eventInfo.title || eventInfo.type}`,
       description: `Following up on ${eventInfo.type} that was scheduled for ${eventInfo.date} ${eventInfo.time || ''}`,
@@ -745,7 +727,7 @@ async function createFollowUpEvent(userId, eventInfo, channelId, guildId) {
       channel_id: channelId
     });
     
-    logger.info(`Created follow-up event for user ${userId} in guild ${guildId} about ${eventInfo.type}`);
+    logger.info(`Created follow-up event for user ${userId} about ${eventInfo.type}`);
   } catch (error) {
     logger.error("Error creating follow-up event:", error);
   }
@@ -756,17 +738,15 @@ async function createFollowUpEvent(userId, eventInfo, channelId, guildId) {
  * @param {string} userId - User ID
  * @param {Object} eventInfo - Event information
  * @param {string} channelId - Channel ID
- * @param {string} guildId - Guild ID
  */
-async function createReminderForEvent(userId, eventInfo, channelId, guildId) {
+async function createReminderForEvent(userId, eventInfo, channelId) {
   try {
     // Calculate event date
     const eventDate = new Date(`${eventInfo.date}T${eventInfo.time || '12:00'}`);
     
-    // Create reminder event with guild ID
+    // Create reminder event
     await createEvent({
       user_id: userId,
-      guild_id: guildId,
       event_type: EVENT_TYPES.REMINDER,
       title: eventInfo.title || `${eventInfo.type} reminder`,
       description: `Reminder for ${eventInfo.type} on ${eventInfo.date} ${eventInfo.time || ''}`,
@@ -775,7 +755,7 @@ async function createReminderForEvent(userId, eventInfo, channelId, guildId) {
       channel_id: channelId
     });
     
-    logger.info(`Created reminder event for user ${userId} in guild ${guildId} about ${eventInfo.type}`);
+    logger.info(`Created reminder event for user ${userId} about ${eventInfo.type}`);
   } catch (error) {
     logger.error("Error creating reminder event:", error);
   }

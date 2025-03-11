@@ -15,6 +15,7 @@ import { initializeCharacterDevelopment, advanceStorylinesPeriodicTask } from '.
 import { scheduleMemoryMaintenance, runMemoryMaintenance } from './utils/memoryMaintenance.js';
 import { initializeTimeSystem, startTimeEventProcessing } from './utils/timeSystem.js';
 import { testDatabaseInDepth } from './utils/databaseDiagnostics.js';
+import { initializeJournalSystem, createRandomJournalEntry } from './utils/journalSystem.js';
 
 
 // Get directory name in ESM
@@ -281,6 +282,43 @@ client.once('ready', async () => {
   // Get the client ID from the bot if not in environment variables
   const clientId = process.env.CLIENT_ID || client.user.id;
   
+
+  // Initialize journal system if channel ID exists
+  try {
+    const { data: settings, error } = await supabase
+      .from('bot_settings')
+      .select('value')
+      .eq('key', 'journal_channel_id')
+      .single();
+      
+    if (!error && settings?.value) {
+      const journalChannelId = settings.value;
+      
+      // Try to fetch the channel to verify it exists
+      try {
+        const channel = await client.channels.fetch(journalChannelId);
+        
+        if (channel) {
+          await initializeJournalSystem(client, journalChannelId);
+          logger.info(`Journal system initialized with channel: ${channel.name} (${journalChannelId})`);
+          
+          // Post a startup message
+          await channel.send("*Bri's journal system is now active. She'll post updates about her interests and activities here!*");
+        } else {
+          logger.warn(`Journal channel with ID ${journalChannelId} not found. Use /setup-journal to configure.`);
+        }
+      } catch (channelError) {
+        logger.warn(`Could not access journal channel with ID ${journalChannelId}:`, channelError);
+        logger.info("Use /setup-journal command to configure the journal channel");
+      }
+    } else {
+      logger.info("No journal channel configured. Use /setup-journal command to set it up.");
+    }
+  } catch (journalError) {
+    logger.error("Error initializing journal system:", journalError);
+  }
+
+
   if (!clientId) {
     logger.error('Failed to register commands: CLIENT_ID is not defined in environment variables and could not be retrieved from the bot.');
     return;
@@ -349,7 +387,15 @@ client.on('interactionCreate', async interaction => {
     } catch (error) {
       logger.error(`Error executing context menu ${interaction.commandName}:`, error);
       // Error handling
+      const reply = { content: 'There was an error while executing this command!', ephemeral: true };
+      
+      if (interaction.deferred || interaction.replied) {
+        await interaction.editReply(reply);
+      } else {
+        await interaction.reply(reply);
+      }
     }
+    return; // Add this return to prevent executing the command twice
   }
 
   if (!command) return;

@@ -29,8 +29,7 @@ export async function handleReactionAdd(reaction, user) {
         // Skip empty messages
         if (!message.content || message.content.trim() === '') return;
         
-        // Don't allow quoting bots or self-quoting
-        if (message.author.bot) return;
+        // Don't allow self-quoting (removed the bot check)
         if (message.author.id === user.id) {
             // Optionally notify the user they can't quote themselves
             try {
@@ -74,10 +73,3 @@ export async function handleReactionAdd(reaction, user) {
         logger.error("Error handling quote reaction:", error);
     }
 }
-
-// Add this to your index.js or event handler file:
-/*
-client.on('messageReactionAdd', async (reaction, user) => {
-    await handleReactionAdd(reaction, user);
-});
-*/

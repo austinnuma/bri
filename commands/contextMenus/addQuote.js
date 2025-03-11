@@ -9,30 +9,22 @@ export const data = new ContextMenuCommandBuilder()
 
 export async function execute(interaction) {
     try {
+        // Only defer if not already deferred or replied to
+        if (!interaction.deferred && !interaction.replied) {
+            await interaction.deferReply({ ephemeral: true });
+        }
+        
         // Get the target message
         const targetMessage = interaction.targetMessage;
         
-        // Don't allow quoting bots or the same user adding their own quote
-        if (targetMessage.author.bot) {
-            return interaction.reply({ 
-                content: "Sorry, I can't quote bots!", 
-                ephemeral: true 
-            });
-        }
-        
+        // Don't allow self-quoting (removed the bot check)
         if (targetMessage.author.id === interaction.user.id) {
-            return interaction.reply({ 
-                content: "You can't quote yourself! That's just showing off!", 
-                ephemeral: true 
-            });
+            return interaction.editReply("You can't quote yourself! That's just showing off!");
         }
 
         // Quote must have actual content
         if (!targetMessage.content || targetMessage.content.trim() === '') {
-            return interaction.reply({ 
-                content: "I can't add this as a quote because it doesn't have any text content.",
-                ephemeral: true 
-            });
+            return interaction.editReply("I can't add this as a quote because it doesn't have any text content.");
         }
 
         // Add the quote
@@ -46,21 +38,22 @@ export async function execute(interaction) {
         );
 
         if (success) {
-            return interaction.reply({ 
-                content: `Added quote from ${targetMessage.author.username}!`,
-                ephemeral: true 
-            });
+            return interaction.editReply(`Added quote from ${targetMessage.author.username}!`);
         } else {
-            return interaction.reply({ 
-                content: "Sorry, I couldn't add that quote. Please try again later.",
-                ephemeral: true 
-            });
+            // This could happen if the quote already exists
+            return interaction.editReply("This message has already been quoted or there was an error adding it.");
         }
     } catch (error) {
         logger.error("Error in Add Quote context menu:", error);
-        return interaction.reply({ 
-            content: "Something went wrong while adding the quote.",
-            ephemeral: true 
-        });
+        
+        // Check if we already replied, and use the appropriate method
+        if (interaction.deferred || interaction.replied) {
+            return interaction.editReply("Something went wrong while adding the quote.");
+        } else {
+            return interaction.reply({ 
+                content: "Something went wrong while adding the quote.",
+                ephemeral: true 
+            });
+        }
     }
 }

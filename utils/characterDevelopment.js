@@ -3,6 +3,8 @@ import { openai, supabase } from '../services/combinedServices.js';
 import { logger } from './logger.js';
 import { getEmbedding } from './improvedEmbeddings.js';
 import { normalizeText } from './textUtils.js';
+import { createStorylineJournalEntry, createInterestJournalEntry } from './journalSystem.js';
+
 
 // Constants for relationship levels
 export const RELATIONSHIP_LEVELS = {
@@ -479,18 +481,38 @@ async function updateOrCreateInterest(interestName, interestData) {
       const combinedFacts = [...new Set([...existingInterest.facts, ...interestData.facts])];
       const combinedTags = [...new Set([...existingInterest.tags, ...interestData.tags])];
       
-      await supabase
+      const newLevel = Math.min(existingInterest.level + 1, 5); // Increase interest level
+      
+      const { data, error: updateError } = await supabase
         .from('bri_interests')
         .update({
-          level: Math.min(existingInterest.level + 1, 5), // Increase interest level
+          level: newLevel,
           facts: combinedFacts,
           tags: combinedTags,
           last_discussed: new Date().toISOString(),
           embedding: embedding
         })
-        .eq('id', existingInterest.id);
+        .eq('id', existingInterest.id)
+        .select()
+        .single();
         
-      logger.info(`Updated existing interest: ${interestName} to level ${Math.min(existingInterest.level + 1, 5)}`);
+      if (updateError) {
+        logger.error(`Error updating interest ${interestName}:`, updateError);
+      } else {
+        logger.info(`Updated existing interest: ${interestName} to level ${newLevel}`);
+        updatedInterest = data;
+        
+        // Check if the level increased enough to warrant a journal entry
+        // Create journal entry if level increased by at least 2 or reached level 4-5
+        const levelIncreased = newLevel - existingInterest.level;
+        if (levelIncreased >= 2 || newLevel >= 4) {
+          try {
+            await createInterestJournalEntry(updatedInterest, false);
+          } catch (journalError) {
+            logger.error(`Error creating journal entry for updated interest ${interestName}:`, journalError);
+          }
+        }
+      }
     } else {
       // Create new interest
       const newInterest = {
@@ -504,12 +526,32 @@ async function updateOrCreateInterest(interestName, interestData) {
         embedding: embedding
       };
       
-      await supabase.from('bri_interests').insert(newInterest);
+      const { data, error: insertError } = await supabase
+      .from('bri_interests')
+      .insert(newInterest)
+      .select()
+      .single();
+      
+    if (insertError) {
+      logger.error(`Error creating interest ${interestName}:`, insertError);
+    } else {
       logger.info(`Created new interest: ${interestName}`);
+      updatedInterest = data;
+      
+      // Create journal entry for new interest
+      try {
+        await createInterestJournalEntry(updatedInterest, true);
+      } catch (journalError) {
+        logger.error(`Error creating journal entry for new interest ${interestName}:`, journalError);
+      }
     }
-  } catch (error) {
-    logger.error(`Error updating/creating interest ${interestName}:`, error);
   }
+  
+  return updatedInterest;
+} catch (error) {
+  logger.error(`Error updating/creating interest ${interestName}:`, error);
+  return null;
+}
 }
 
 /**
@@ -1359,16 +1401,29 @@ Keep it under 2 sentences.
       content: completionUpdate
     }];
     
-    await supabase
+    const { data: updatedStoryline, error } = await supabase
       .from('bri_storyline')
       .update({
         status: 'completed',
         progress: 1.0,
         updates: updates
       })
-      .eq('id', storyline.id);
+      .eq('id', storyline.id)
+      .select()
+      .single();
       
-    logger.info(`Completed storyline: ${storyline.title}`);
+    if (error) {
+      logger.error(`Error updating completed storyline ${storyline.id}:`, error);
+    } else {
+      logger.info(`Completed storyline: ${storyline.title}`);
+      
+      // Create journal entry for completed storyline
+      try {
+        await createStorylineJournalEntry(updatedStoryline);
+      } catch (journalError) {
+        logger.error(`Error creating journal entry for completed storyline ${storyline.title}:`, journalError);
+      }
+    }
   } catch (error) {
     logger.error(`Error completing storyline ${storyline.id}:`, error);
   }
@@ -1418,15 +1473,34 @@ Don't repeat previous updates.
       content: update
     }];
     
-    await supabase
+    const { data: updatedStoryline, error } = await supabase
       .from('bri_storyline')
       .update({
         progress: newProgress,
         updates: updates
       })
-      .eq('id', storyline.id);
+      .eq('id', storyline.id)
+      .select()
+      .single();
       
-    logger.info(`Generated update for storyline: ${storyline.title}`);
+    if (error) {
+      logger.error(`Error updating storyline ${storyline.id}:`, error);
+    } else {
+      logger.info(`Generated update for storyline: ${storyline.title}`);
+      
+      // Only create journal entries for significant progress (>10% increase or milestone reached)
+      const progressChange = newProgress - storyline.progress;
+      const isSignificantProgress = progressChange > 0.1 || 
+                                   Math.floor(newProgress * 10) > Math.floor(storyline.progress * 10);
+      
+      if (isSignificantProgress) {
+        try {
+          await createStorylineJournalEntry(updatedStoryline);
+        } catch (journalError) {
+          logger.error(`Error creating journal entry for storyline update ${storyline.title}:`, journalError);
+        }
+      }
+    }
   } catch (error) {
     logger.error(`Error generating storyline update for ${storyline.id}:`, error);
   }
@@ -1492,23 +1566,38 @@ Format the response as JSON:
     const embedding = await getEmbedding(embeddingText);
     
     // Create the new storyline
-    await supabase.from('bri_storyline').insert({
-      id: storylineData.id,
-      title: storylineData.title,
-      description: storylineData.description,
-      status: 'in_progress',
-      start_date: now.toISOString(),
-      end_date: endDate.toISOString(),
-      progress: 0.1,
-      updates: [{
-        date: now.toISOString(),
-        content: storylineData.initialUpdate
-      }],
-      share_threshold: 0.6,
-      embedding: embedding
-    });
-    
-    logger.info(`Created new storyline: ${storylineData.title}`);
+    const { data: newStoryline, error: insertError } = await supabase
+      .from('bri_storyline')
+      .insert({
+        id: storylineData.id,
+        title: storylineData.title,
+        description: storylineData.description,
+        status: 'in_progress',
+        start_date: now.toISOString(),
+        end_date: endDate.toISOString(),
+        progress: 0.1,
+        updates: [{
+          date: now.toISOString(),
+          content: storylineData.initialUpdate
+        }],
+        share_threshold: 0.6,
+        embedding: embedding
+      })
+      .select()
+      .single();
+      
+    if (insertError) {
+      logger.error("Error creating new storyline:", insertError);
+    } else {
+      logger.info(`Created new storyline: ${storylineData.title}`);
+      
+      // Create journal entry for new storyline
+      try {
+        await createStorylineJournalEntry(newStoryline);
+      } catch (journalError) {
+        logger.error(`Error creating journal entry for new storyline ${storylineData.title}:`, journalError);
+      }
+    }
   } catch (error) {
     logger.error("Error generating new storyline:", error);
   }

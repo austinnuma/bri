@@ -180,11 +180,16 @@ function findBestCategorySemanticMatch(text, categories) {
 /**
  * Returns the effective system prompt without appending memories
  * @param {string} userId - The user's ID
+ * @param {string} guildId - The guild ID
  * @returns {string} - The effective system prompt
  */
-export function getEffectiveSystemPrompt(userId) {
+export function getEffectiveSystemPrompt(userId, guildId) {
   let prompt = STATIC_CORE_PROMPT;
-  const personality = userPersonalityPrefs.get(userId);
+
+  // Use combined user+guild key
+  const personalityKey = `${userId}:${guildId}`;
+  const personality = userPersonalityPrefs.get(personalityKey);
+    
   if (personality) {
     prompt += "\n" + personalityToString(personality);
   }
@@ -195,12 +200,13 @@ export function getEffectiveSystemPrompt(userId) {
  * Processes a memory command and adds or updates a memory
  * @param {string} userId - The user's ID
  * @param {string} memoryText - The memory text to store
+ * @param {string} guildId - The guild ID
  * @returns {Promise<object>} - Result of the operation
  */
-export async function processMemoryCommand(userId, memoryText) {
+export async function processMemoryCommand(userId, memoryText, guildId) {
   try {
     // Check if this memory is similar to an existing one
-    const similarMemory = await findSimilarMemory(userId, memoryText);
+    const similarMemory = await findSimilarMemory(userId, memoryText, guildId);
     
     if (similarMemory) {
       // Update the existing memory
@@ -208,14 +214,15 @@ export async function processMemoryCommand(userId, memoryText) {
         similarMemory.id, 
         memoryText, 
         MEMORY_TYPES.EXPLICIT, 
-        similarMemory.category
+        similarMemory.category,
+        guildId
       );
       
       if (!updatedMemory) {
         return { success: false, error: "Error updating memory." };
       }
       
-      logger.info(`Updated memory ${similarMemory.id} for user ${userId}`);
+      logger.info(`Updated memory ${similarMemory.id} for user ${userId} in guild ${guildId}`);
       return { success: true, message: "Got it! I've updated my memory. :)" };
     } else {
       // Create a new memory
@@ -226,14 +233,15 @@ export async function processMemoryCommand(userId, memoryText) {
         MEMORY_TYPES.EXPLICIT, 
         category, 
         1.0, // Full confidence for explicit memories
-        'memory_command'
+        'memory_command', 
+        guildId
       );
       
       if (!newMemory) {
         return { success: false, error: "Error creating memory." };
       }
       
-      logger.info(`Created new memory for user ${userId}`);
+      logger.info(`Created new memory for user ${userId} in guild ${guildId}`);
       return { success: true, message: "Got it! I'll remember that. :)" };
     }
   } catch (error) {
@@ -246,15 +254,17 @@ export async function processMemoryCommand(userId, memoryText) {
  * Finds a memory similar to the provided text
  * @param {string} userId - The user's ID
  * @param {string} memoryText - The memory text to compare
+ * @param {string} guildId - The guild ID
  * @returns {Promise<object|null>} - Similar memory or null
  */
-async function findSimilarMemory(userId, memoryText) {
+async function findSimilarMemory(userId, memoryText, guildId) {
   try {
     const embedding = await getEmbedding(memoryText);
     
     // Use the RPC function with a lower threshold for finding similar memories
     const { data, error } = await supabase.rpc('match_unified_memories', {
       p_user_id: userId,
+      p_guild_id: guildId,
       p_query_embedding: embedding,
       p_match_threshold: 0.5, // Lower threshold to catch more similar memories
       p_match_count: 1,
@@ -262,7 +272,7 @@ async function findSimilarMemory(userId, memoryText) {
     });
     
     if (error) {
-      logger.error("Error finding similar memory", { error });
+      logger.error("Error finding similar memory", { error, userId, guildId });
       return null;
     }
     
@@ -272,7 +282,7 @@ async function findSimilarMemory(userId, memoryText) {
     
     return null;
   } catch (error) {
-    logger.error("Error in findSimilarMemory", { error });
+    logger.error("Error in findSimilarMemory", { error, userId, guildId });
     return null;
   }
 }
@@ -285,9 +295,10 @@ async function findSimilarMemory(userId, memoryText) {
  * @param {string} category - The memory category
  * @param {number} confidence - Confidence score (0.0 to 1.0)
  * @param {string} source - Where the memory came from
+ * @param {string} guildId - The guild ID
  * @returns {Promise<object|null>} - The created memory or null
  */
-export async function createMemory(userId, memoryText, memoryType, category, confidence, source) {
+export async function createMemory(userId, memoryText, memoryType, category, confidence, source, guildId) {
   try {
     // Get embedding
     const embedding = await getEmbedding(memoryText);
@@ -297,6 +308,7 @@ export async function createMemory(userId, memoryText, memoryType, category, con
       .from('unified_memories')
       .insert({
         user_id: userId,
+        guild_id: guildId, // Add guild ID
         memory_text: memoryText,
         embedding: embedding,
         memory_type: memoryType,
@@ -308,13 +320,13 @@ export async function createMemory(userId, memoryText, memoryType, category, con
       .single();
       
     if (error) {
-      logger.error("Error creating memory", { error });
+      logger.error("Error creating memory", { error, userId, guildId });
       return null;
     }
     
     return data;
   } catch (error) {
-    logger.error("Error in createMemory", { error });
+    logger.error("Error in createMemory", { error, userId, guildId });
     return null;
   }
 }
@@ -325,9 +337,10 @@ export async function createMemory(userId, memoryText, memoryType, category, con
  * @param {string} memoryText - The new memory text
  * @param {string} memoryType - The memory type (explicit/intuited)
  * @param {string} category - The memory category
+ * @param {string} guildId - The guild ID
  * @returns {Promise<object|null>} - The updated memory or null
  */
-export async function updateMemory(memoryId, memoryText, memoryType, category) {
+export async function updateMemory(memoryId, memoryText, memoryType, category, guildId) {
   try {
     // Get embedding
     const embedding = await getEmbedding(memoryText);
@@ -340,6 +353,7 @@ export async function updateMemory(memoryId, memoryText, memoryType, category) {
         embedding: embedding,
         memory_type: memoryType,
         category: category,
+        guild_id: guildId,
         updated_at: new Date()
       })
       .eq('id', memoryId)
@@ -347,13 +361,13 @@ export async function updateMemory(memoryId, memoryText, memoryType, category) {
       .single();
       
     if (error) {
-      logger.error("Error updating memory", { error });
+      logger.error("Error updating memory", { error, memoryId, guildId });
       return null;
     }
     
     return data;
   } catch (error) {
-    logger.error("Error in updateMemory", { error });
+    logger.error("Error in updateMemory", { error, memoryId, guildId });
     return null;
   }
 }
@@ -363,12 +377,13 @@ export async function updateMemory(memoryId, memoryText, memoryType, category) {
  * @param {string} userId - The user's ID
  * @param {string} memoryText - The memory text
  * @param {number} confidence - Confidence score (optional, default 0.8)
+ * @param {string} guildId - The guild ID
  * @returns {Promise<object|null>} - The created memory or null
  */
-export async function insertIntuitedMemory(userId, memoryText, confidence = 0.8) {
+export async function insertIntuitedMemory(userId, memoryText, confidence = 0.8, guildId) {
   try {
     // First check if this memory is too similar to an existing one
-    const similarMemory = await findSimilarMemory(userId, memoryText);
+    const similarMemory = await findSimilarMemory(userId, memoryText, guildId);
     
     if (similarMemory) {
       // If the existing memory has higher confidence, keep it unchanged
@@ -381,7 +396,8 @@ export async function insertIntuitedMemory(userId, memoryText, confidence = 0.8)
         similarMemory.id,
         memoryText,
         MEMORY_TYPES.INTUITED,
-        similarMemory.category
+        similarMemory.category,
+        guildId
       );
     }
     
@@ -410,9 +426,10 @@ export async function insertIntuitedMemory(userId, memoryText, confidence = 0.8)
  * @param {number} limit - Maximum number of memories to return
  * @param {string} memoryType - Filter by memory type (optional)
  * @param {string} category - Filter by category (optional)
+ * @param {string} guildId - The guild ID
  * @returns {Promise<string>} - Relevant memories as text
  */
-export async function retrieveRelevantMemories(userId, query, limit = 5, memoryType = null, category = null) {
+export async function retrieveRelevantMemories(userId, query, limit = 5, memoryType = null, category = null, guildId) {
   try {
     // Get embedding for query
     const embedding = await getEmbedding(query);
@@ -422,7 +439,8 @@ export async function retrieveRelevantMemories(userId, query, limit = 5, memoryT
       threshold: 0.6,
       limit,
       memoryType,
-      category
+      category,
+      guildId
     });
     
     if (!matches || matches.length === 0) {
@@ -446,7 +464,7 @@ export async function retrieveRelevantMemories(userId, query, limit = 5, memoryT
     return formattedMemories.join("\n");
   } catch (error) {
     // Make sure to capture and log the full error
-    logger.error("Error in retrieveRelevantMemories:", error, error.stack);
+    logger.error("Error in retrieveRelevantMemories:", error, error.stack, { userId, guilId });
     return "";
   }
 }
@@ -456,11 +474,12 @@ export async function retrieveRelevantMemories(userId, query, limit = 5, memoryT
  * @param {string} userId - The user's ID
  * @param {string} basePrompt - The base system prompt
  * @param {string} query - The user's query
+ * @param {string} guildId - The guild ID
  * @returns {Promise<string>} - Combined system prompt
  */
-export async function getCombinedSystemPromptWithMemories(userId, basePrompt, query) {
+export async function getCombinedSystemPromptWithMemories(userId, basePrompt, query, guildId) {
   // Get all types of relevant memories
-  const allMemories = await retrieveRelevantMemories(userId, query, 6);
+  const allMemories = await retrieveRelevantMemories(userId, query, 6, null, null, guildId);
   
   // Only append memories if there are any
   let combined = basePrompt;
