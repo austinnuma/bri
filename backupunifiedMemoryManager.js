@@ -10,17 +10,6 @@ import { getEmbedding } from './improvedEmbeddings.js';
 // Import the caching function
 import { cachedQuery, getCachedMemories } from './databaseCache.js';
 import { cachedVectorSearch } from './databaseCache.js';
-// Import database-backed user settings
-import { 
-  getUserPersonality, 
-  setUserPersonality,
-  getUserDynamicPrompt,
-  setUserDynamicPrompt,
-  getUserContextLength,
-  setUserContextLength,
-  getUserConversation,
-  setUserConversation
-} from './db/userSettings.js';
 
 
 
@@ -30,9 +19,7 @@ const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY
 // In-memory cache for personality preferences per user.
 export const userPersonalityPrefs = new Map();
 
-// Database-based per-user state - in-memory caches removed
-// These Map objects will be migrated to use database storage entirely
-// The migration will preserve their key pattern but eliminate the need for these Maps
+// In-memory maps for per-user state.
 const userDynamicPrompts = new Map();
 const userConversations = new Map();
 const userContextLengths = new Map();
@@ -582,23 +569,43 @@ export const defaultPersonality = {
 
 /**
  * Retrieves the personality preferences for a given user.
- * Using database-backed access through userSettings.js
+ * If not cached, attempts to load from Supabase.
  * @param {string} userId - User ID
  * @param {string} guildId - Guild ID
  * @returns {Promise<Object>} Personality object.
  */
 export async function getPersonality(userId, guildId) {
-  try {
-    // Import at the top of the file
-    // import { getUserPersonality } from './db/userSettings.js';
-    
-    // Use the new database helper
-    return await getUserPersonality(userId, guildId);
-  } catch (error) {
-    logger.error(`Error fetching personality preferences for user ${userId} in guild ${guildId}:`, error);
-    // Fall back to default if an error occurs
+  // Create a combined key for the cache
+  const cacheKey = `${userId}:${guildId}`;
+  
+  if (userPersonalityPrefs.has(cacheKey)) {
+    return userPersonalityPrefs.get(cacheKey);
+  }
+  
+  // Attempt to load from Supabase.
+  const { data, error } = await supabase
+    .from('user_conversations')
+    .select('personality_preferences')
+    .eq('user_id', userId)
+    .eq('guild_id', guildId)
+    .single();
+
+  if (error) {
+    // Log with guild context
+    console.error(`Error fetching personality preferences for user ${userId} in guild ${guildId}:`, error);
+    // Fall back to default if an error occurs.
+    userPersonalityPrefs.set(cacheKey, defaultPersonality);
     return defaultPersonality;
   }
+  
+  let personality = data?.personality_preferences;
+  if (!personality) {
+    personality = defaultPersonality;
+  }
+  
+  // Store with the combined key
+  userPersonalityPrefs.set(cacheKey, personality);
+  return personality;
 }
 
 /**
@@ -610,24 +617,29 @@ export async function getPersonality(userId, guildId) {
  * @returns {Promise<Object>} The updated personality object.
  */
 export async function setPersonalityPreference(userId, field, value, guildId) {
-  try {
-    // Import at the top of the file
-    // import { getUserPersonality, setUserPersonality } from './db/userSettings.js';
-    
-    // Get current personality
-    let personality = await getUserPersonality(userId, guildId);
-    
-    // Update the specific field
-    personality = { ...personality, [field]: value };
-    
-    // Save to database
-    await setUserPersonality(userId, guildId, personality);
-    
-    return personality;
-  } catch (error) {
-    logger.error(`Error updating personality preferences for user ${userId} in guild ${guildId}:`, error);
+  // Pass the guildId to getPersonality
+  let personality = await getPersonality(userId, guildId);
+  personality = { ...personality, [field]: value };
+  
+  // Create a combined key for the cache
+  const cacheKey = `${userId}:${guildId}`;
+  userPersonalityPrefs.set(cacheKey, personality);
+
+  // Upsert the personality preferences in the Supabase record.
+  // Include guild_id in the upsert operation
+  const { error } = await supabase.from('user_conversations').upsert({
+    user_id: userId,
+    guild_id: guildId,  // Add guild_id to the upsert
+    personality_preferences: personality,
+    updated_at: new Date().toISOString(),
+  });
+  
+  if (error) {
+    console.error(`Error updating personality preferences for user ${userId} in guild ${guildId}:`, error);
     throw error;
   }
+  
+  return personality;
 }
 
 /**

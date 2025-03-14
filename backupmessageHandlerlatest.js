@@ -11,13 +11,6 @@ import {
   insertIntuitedMemory,
   categorizeMemory 
 } from './unifiedMemoryManager.js';
-import {
-  getUserConversation,
-  getUserContextLength,
-  setUserConversation,
-  getUserDynamicPrompt,
-  setUserDynamicPrompt
-} from './db/userSettings.js';
 import { splitMessage, replaceEmoticons } from './textUtils.js';
 import { openai, getChatCompletion, defaultAskModel, supabase } from '../services/combinedServices.js';
 import { logger } from './logger.js';
@@ -40,8 +33,7 @@ import { getEmbedding } from './improvedEmbeddings.js';
 import natural from 'natural';
 import { getServerConfig, getServerPrefix, isFeatureEnabled } from './serverConfigManager.js';
 
-// No longer using in-memory Maps, using database functions instead
-// const { userConversations, userContextLengths, userDynamicPrompts } = memoryManagerState;
+const { userConversations, userContextLengths, userDynamicPrompts } = memoryManagerState;
 
 const SUMMARY_THRESHOLD = 3;
 const INACTIVITY_THRESHOLD = 8 * 60 * 60 * 1000; // 8 hours
@@ -148,8 +140,8 @@ async function handleImageAttachments(message, cleanedContent, guildId) {
     // Get all image URLs
     const imageUrls = imageAttachments.map(attachment => attachment.url);
     
-    // Get conversation history for this user from database
-    let conversationHistory = await getUserConversation(message.author.id, guildId) || [];
+    // Get conversation history for this user to provide context
+    let conversationHistory = userConversations.get(`${message.author.id}:${guildId}`) || [];
     
     // Use the enhanced analyzeImages function with conversation context
     const imageDescription = await analyzeImages(
@@ -178,13 +170,23 @@ async function handleImageAttachments(message, cleanedContent, guildId) {
       });
       
       // Apply context length limits if needed
-      const contextLength = await getUserContextLength(message.author.id, guildId) || defaultContextLength;
+      const contextLength = userContextLengths.get(`${message.author.id}:${guildId}`) || defaultContextLength;
       if (conversationHistory.length > contextLength) {
         conversationHistory = [conversationHistory[0], ...conversationHistory.slice(-(contextLength - 1))];
       }
       
-      // Save the updated conversation to database
-      await setUserConversation(message.author.id, guildId, conversationHistory);
+      // Save the updated conversation
+      userConversations.set(`${message.author.id}:${guildId}`, conversationHistory);
+      
+      // Save to database with guild ID
+      await supabase.from('user_conversations').upsert({
+        user_id: message.author.id,
+        guild_id: guildId,
+        conversation: conversationHistory,
+        system_prompt: STATIC_CORE_PROMPT + "\n" + (userDynamicPrompts.get(`${message.author.id}:${guildId}`) || ""),
+        context_length: userContextLengths.get(`${message.author.id}:${guildId}`) || defaultContextLength,
+        updated_at: new Date().toISOString(),
+      });
       
       invalidateUserCache(message.author.id, guildId);
     }
@@ -323,25 +325,20 @@ export async function handleLegacyMessage(message) {
     guildId
   );
 
-    // Using DB functions now instead of in-memory Map objects
-  
-  // Get conversation from database
-  let conversation = await getUserConversation(message.author.id, guildId) || [
+  // Get conversation with guild context
+  let conversation = userConversations.get(`${message.author.id}:${guildId}`) || [
     { role: "system", content: combinedSystemPrompt }
   ];
   
-  // Update the system prompt and add the user's message
   conversation[0] = { role: "system", content: combinedSystemPrompt };
   conversation.push({ role: "user", content: cleanedContent });
 
-  // Apply context length limit
-  const contextLength = await getUserContextLength(message.author.id, guildId) || defaultContextLength;
+  const contextLength = userContextLengths.get(`${message.author.id}:${guildId}`) || defaultContextLength;
   if (conversation.length > contextLength) {
     conversation = [conversation[0], ...conversation.slice(-(contextLength - 1))];
   }
   
-  // Save updated conversation to database instead of in-memory Map
-  await setUserConversation(message.author.id, guildId, conversation);
+  userConversations.set(`${message.author.id}:${guildId}`, conversation);
 
   await message.channel.sendTyping();
 
@@ -401,12 +398,17 @@ export async function handleLegacyMessage(message) {
 
     // Update conversation with Bri's response
     conversation.push({ role: "assistant", content: reply });
-    
-    // Get dynamic prompt directly from database
-    const dynamicPrompt = await getUserDynamicPrompt(message.author.id, guildId);
-    
-    // Save to database directly - overwrite in-memory approach
-    await setUserConversation(message.author.id, guildId, conversation);
+    userConversations.set(`${message.author.id}:${guildId}`, conversation);
+
+    // Save conversation to database with guild ID
+    await supabase.from('user_conversations').upsert({
+      user_id: message.author.id,
+      guild_id: guildId,
+      conversation,
+      system_prompt: STATIC_CORE_PROMPT + "\n" + (userDynamicPrompts.get(`${message.author.id}:${guildId}`) || ""),
+      context_length: userContextLengths.get(`${message.author.id}:${guildId}`) || defaultContextLength,
+      updated_at: new Date().toISOString(),
+    });
     
     invalidateUserCache(message.author.id, guildId);
 
@@ -584,7 +586,7 @@ async function summarizeAndExtract(userId, conversation, guildId) {
         const { data, error } = await supabase
           .from('unified_memories')
           .insert(uniqueMemories, {
-            onConflict: 'user_id, guild_id, memory_text',
+            onConflict: 'user_id,guild_id,memory_text',
             ignoreDuplicates: true
           });
           
