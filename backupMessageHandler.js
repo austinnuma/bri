@@ -7,16 +7,16 @@ import {
   STATIC_CORE_PROMPT,
   insertIntuitedMemory,
   categorizeMemory 
-} from './unifiedMemoryManager.js';
-import { splitMessage, replaceEmoticons } from './textUtils.js';
-import { openai, getChatCompletion, defaultAskModel, supabase } from '../services/combinedServices.js';
-import { logger } from './logger.js';
-import { extractIntuitedMemories, enhancedMemoryExtraction } from './extractionAndMemory.js';
-import { enhancedSummarizeConversation } from './summarization.js';
-import { analyzeImage, analyzeImages } from '../services/visionService.js';
-import { getBatchEmbeddings } from './improvedEmbeddings.js';
-import { getCachedUser, invalidateUserCache, warmupUserCache, cachedVectorSearch } from '../utils/databaseCache.js';
-import { maybeAutoSaveQuote } from './quoteManager.js';
+} from './utils/unifiedMemoryManager.js';
+import { splitMessage, replaceEmoticons } from './utils/textUtils.js';
+import { openai, getChatCompletion, defaultAskModel, supabase } from './services/combinedServices.js';
+import { logger } from './utils/logger.js';
+import { enhancedMemoryExtraction } from './utils/extractionAndMemory.js';
+import { enhancedSummarizeConversation } from './utils/summarization.js';
+import { analyzeImage, analyzeImages } from './services/visionService.js';
+import { getBatchEmbeddings } from './utils/improvedEmbeddings.js';
+import { getCachedUser, invalidateUserCache, warmupUserCache, cachedVectorSearch } from './utils/databaseCache.js';
+import { maybeAutoSaveQuote } from './utils/quoteManager.js';
 import { 
   analyzeConversationForInterests,
   updateRelationshipAfterInteraction,
@@ -24,11 +24,11 @@ import {
   getPersonalContent,
   personalizeResponse,
   detectAndStoreInsideJoke
-} from './characterDevelopment.js';
-import { extractTimeAndEvent, createEvent, EVENT_TYPES, REMINDER_TIMES, getUserTimezone } from './timeSystem.js';
-import { getEmbedding } from './improvedEmbeddings.js';
+} from './utils/characterDevelopment.js';
+import { extractTimeAndEvent, createEvent, EVENT_TYPES, REMINDER_TIMES, getUserTimezone } from './utils/timeSystem.js';
+import { getEmbedding } from './utils/improvedEmbeddings.js';
 import natural from 'natural';
-import { getServerConfig, getServerPrefix, isFeatureEnabled } from './serverConfigManager.js';
+import { getServerConfig, getServerPrefix, isFeatureEnabled } from './utils/serverConfigManager.js';
 
 
 const { userConversations, userContextLengths, userDynamicPrompts } = memoryManagerState;

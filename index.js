@@ -14,13 +14,8 @@ import { handleReactionAdd } from './utils/reactionHandler.js';
 import { initializeCharacterDevelopment, advanceStorylinesPeriodicTask } from './utils/characterDevelopment.js';
 import { scheduleMemoryMaintenance, runMemoryMaintenance } from './utils/memoryMaintenance.js';
 import { initializeTimeSystem, startTimeEventProcessing } from './utils/timeSystem.js';
-import { testDatabaseInDepth } from './utils/databaseDiagnostics.js';
 import { initializeJournalSystem, createRandomJournalEntry } from './utils/journalSystem.js';
 
-
-// Get directory name in ESM
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
 
 // Initialize Discord client with the required intents
 const client = new Client({
@@ -35,21 +30,41 @@ const client = new Client({
 
 // Get the client ID and guild ID
 const clientId = process.env.CLIENT_ID || client.user.id;
-const testGuildId = process.env.TEST_GUILD_ID; // Add this to your .env file
+const testGuildId = process.env.TEST_GUILD_ID; 
 
-const rest = new REST({ version: '10' }).setToken(process.env.BOT_TOKEN);
-(async () => {
-  try {
-    logger.info(`Started refreshing global application (/) commands.`);
-    await rest.put(
-      Routes.applicationCommands(clientId),
-      { body: commands },
-    );
-    logger.info(`Successfully reloaded global application (/) commands.`);
-  } catch (error) {
-    logger.error(error);
-  }
-})();
+
+/**
+ * 
+ * Initial Checks and Periodic Maintenance
+ * 
+ */
+
+// Get directory name in ESM
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+
+// Set up a periodic cache maintenance function
+function setupCacheMaintenance() {
+  // Log cache stats every hour
+  setInterval(() => {
+    const stats = getCacheStats();
+    logger.info('Cache statistics:', stats);
+  }, 60 * 60 * 1000); // Every hour
+}
+setupCacheMaintenance();
+
+// Make sure the quote table exists
+ensureQuoteTableExists().catch(err => {
+  logger.error("Error ensuring quote table exists:", err);
+});
+
+
+
+/**
+ * 
+ * Command Handling
+ * 
+ */
 
 // Create a new collection for slash commands
 client.commands = new Collection();
@@ -101,15 +116,21 @@ if (fs.existsSync(contextMenusPath)) {
   }
 }
 
-// Set up a periodic cache maintenance function
-function setupCacheMaintenance() {
-  // Log cache stats every hour
-  setInterval(() => {
-    const stats = getCacheStats();
-    logger.info('Cache statistics:', stats);
-  }, 60 * 60 * 1000); // Every hour
-}
-setupCacheMaintenance();
+// Refresh Command Registration
+const rest = new REST({ version: '10' }).setToken(process.env.BOT_TOKEN);
+(async () => {
+  try {
+    logger.info(`Started refreshing global application (/) commands.`);
+    await rest.put(
+      Routes.applicationCommands(clientId),
+      { body: commands },
+    );
+    logger.info(`Successfully reloaded global application (/) commands.`);
+  } catch (error) {
+    logger.error(error);
+  }
+})();
+
 
 
 /**
@@ -153,10 +174,7 @@ async function warmupActiveCaches() {
 setInterval(warmupActiveCaches, 2 * 60 * 60 * 1000);
 
 
-// Make sure the quote table exists
-ensureQuoteTableExists().catch(err => {
-  logger.error("Error ensuring quote table exists:", err);
-});
+
 
 
 scheduleMemoryMaintenance(1); // Run once a day
@@ -346,30 +364,30 @@ client.once('ready', async () => {
   
   logger.info(`Registering commands for application ID: ${clientId}`);
   
-  // Register commands both globally and to the test guild
+  // Register commands
   (async () => {
     try {
       logger.info('Started refreshing application (/) commands.');
       
-      // Always register commands globally (can take up to an hour)
-      await rest.put(
-        Routes.applicationCommands(clientId),
-        { body: commands },
-      );
-      logger.info('Successfully reloaded global application commands.');
-      
-      // Additionally, register to the test guild if ID is available (instant update)
       if (testGuildId) {
+        // For testing: Register commands to a specific guild (instant update)
         await rest.put(
           Routes.applicationGuildCommands(clientId, testGuildId),
           { body: commands },
         );
         logger.info(`Successfully reloaded application commands for test guild ${testGuildId}.`);
+      } else {
+        // For production: Register commands globally (can take up to an hour)
+        await rest.put(
+          Routes.applicationCommands(clientId),
+          { body: commands },
+        );
+        logger.info('Successfully reloaded global application commands.');
       }
     } catch (error) {
       logger.error('Error registering commands:', error);
     }
-  })(); // Immediately invoke the async function
+  })();
 });
 
 // Handle slash command interactions

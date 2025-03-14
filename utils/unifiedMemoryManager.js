@@ -308,7 +308,7 @@ export async function createMemory(userId, memoryText, memoryType, category, con
       .from('unified_memories')
       .insert({
         user_id: userId,
-        guild_id: guildId, // Add guild ID
+        guild_id: guildId,
         memory_text: memoryText,
         embedding: embedding,
         memory_type: memoryType,

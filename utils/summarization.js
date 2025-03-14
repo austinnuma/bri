@@ -1,7 +1,6 @@
-import OpenAI from 'openai';
+import { openai } from '../services/combinedServices.js';
 const summarizationModel = "gpt-3.5-turbo"; // model for summarization tasks
 
-import { openai } from '../services/combinedServices.js';
 
 /**
  * Performs a direct summarization of a conversation with enhanced preference detection.

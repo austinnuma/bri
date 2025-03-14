@@ -14,7 +14,7 @@ import {
 import { splitMessage, replaceEmoticons } from './textUtils.js';
 import { openai, getChatCompletion, defaultAskModel, supabase } from '../services/combinedServices.js';
 import { logger } from './logger.js';
-import { extractIntuitedMemories, enhancedMemoryExtraction } from './extractionAndMemory.js';
+import { enhancedMemoryExtraction } from './extractionAndMemory.js';
 import { enhancedSummarizeConversation } from './summarization.js';
 import { analyzeImage, analyzeImages } from '../services/visionService.js';
 import { getBatchEmbeddings } from './improvedEmbeddings.js';

@@ -37,9 +37,10 @@ export function splitMessage(text, maxLength = 2000) {
   }
   
   import natural from 'natural';
+
+
 const tokenizer = new natural.WordTokenizer();
 const stemmer = natural.PorterStemmer;
-
 /**
  * Normalizes a given text string by:
  *  - Converting to lowercase
