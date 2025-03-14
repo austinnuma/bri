@@ -2,11 +2,12 @@
 import { SlashCommandBuilder, PermissionFlagsBits, ChannelType } from 'discord.js';
 import { initializeJournalSystem, createRandomJournalEntry } from '../utils/journalSystem.js';
 import { logger } from '../utils/logger.js';
+import { supabase } from '../services/combinedServices.js';
+
 
 export const data = new SlashCommandBuilder()
   .setName('setup-journal')
   .setDescription('Sets up Bri\'s personal journal channel')
-  .setDefaultMemberPermissions(PermissionFlagsBits.ManageChannels)
   .addChannelOption(option =>
     option.setName('channel')
       .setDescription('The channel to use for Bri\'s journal (leave empty to create a new one)')
@@ -18,6 +19,10 @@ export const data = new SlashCommandBuilder()
 
 export async function execute(interaction) {
   await interaction.deferReply({ ephemeral: true });
+  // Manually check if the user has the ManageChannels permission
+  if (!interaction.member.permissions.has(PermissionFlagsBits.ManageChannels)) {
+    return interaction.reply({ content: 'You do not have permission to use this command. (Requires Manage Channels)', ephemeral: true });
+  }
   
   try {
     let journalChannel;
@@ -62,7 +67,7 @@ export async function execute(interaction) {
     
     // Store the channel ID in the database
     try {
-      const { error } = await interaction.client.supabase
+      const { error } = await supabase
         .from('bot_settings')
         .upsert({
           key: 'journal_channel_id',

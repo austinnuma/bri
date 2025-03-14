@@ -37,6 +37,20 @@ const client = new Client({
 const clientId = process.env.CLIENT_ID || client.user.id;
 const testGuildId = process.env.TEST_GUILD_ID; // Add this to your .env file
 
+const rest = new REST({ version: '10' }).setToken(process.env.BOT_TOKEN);
+(async () => {
+  try {
+    logger.info(`Started refreshing global application (/) commands.`);
+    await rest.put(
+      Routes.applicationCommands(clientId),
+      { body: commands },
+    );
+    logger.info(`Successfully reloaded global application (/) commands.`);
+  } catch (error) {
+    logger.error(error);
+  }
+})();
+
 // Create a new collection for slash commands
 client.commands = new Collection();
 
@@ -104,10 +118,10 @@ setupCacheMaintenance();
  */
 async function warmupActiveCaches() {
   try {
-    // Get list of recently active users (last 24 hours)
+    // Get list of recently active users (last 24 hours) with their guild IDs
     const { data: activeUsers, error } = await supabase
       .from('discord_users')
-      .select('user_id')
+      .select('user_id, guild_id')
       .gt('last_active', new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString())
       .limit(50); // Limit to most recent 50 users
       
@@ -116,9 +130,15 @@ async function warmupActiveCaches() {
       return;
     }
     
-    // Warm up cache for each active user
+    // Warm up cache for each active user in their respective guild
     for (const user of activeUsers) {
-      await warmupUserCache(user.user_id);
+      // Skip if no server_id is available
+      if (!user.server_id) {
+        logger.debug(`Skipping cache warmup for user ${user.user_id} with no server_id`);
+        continue;
+      }
+      
+      await warmupUserCache(user.user_id, user.server_id);
       // Small delay to avoid overloading the database
       await new Promise(resolve => setTimeout(resolve, 100));
     }
@@ -326,30 +346,30 @@ client.once('ready', async () => {
   
   logger.info(`Registering commands for application ID: ${clientId}`);
   
-  // Register commands
+  // Register commands both globally and to the test guild
   (async () => {
     try {
       logger.info('Started refreshing application (/) commands.');
       
+      // Always register commands globally (can take up to an hour)
+      await rest.put(
+        Routes.applicationCommands(clientId),
+        { body: commands },
+      );
+      logger.info('Successfully reloaded global application commands.');
+      
+      // Additionally, register to the test guild if ID is available (instant update)
       if (testGuildId) {
-        // For testing: Register commands to a specific guild (instant update)
         await rest.put(
           Routes.applicationGuildCommands(clientId, testGuildId),
           { body: commands },
         );
         logger.info(`Successfully reloaded application commands for test guild ${testGuildId}.`);
-      } else {
-        // For production: Register commands globally (can take up to an hour)
-        await rest.put(
-          Routes.applicationCommands(clientId),
-          { body: commands },
-        );
-        logger.info('Successfully reloaded global application commands.');
       }
     } catch (error) {
       logger.error('Error registering commands:', error);
     }
-  })();
+  })(); // Immediately invoke the async function
 });
 
 // Handle slash command interactions
@@ -368,13 +388,19 @@ client.on('interactionCreate', async interaction => {
 
   if (!interaction.isCommand()) return;
 
-  // Warm up cache for this user
+  // Warm up cache for this user - now with guild ID
   try {
-    await warmupUserCache(interaction.user.id);
+    // Make sure we have a guild ID (interaction.guildId should be available for guild interactions)
+    if (interaction.guildId) {
+      await warmupUserCache(interaction.user.id, interaction.guildId);
+    } else {
+      logger.debug(`Skipping cache warmup for user ${interaction.user.id} with no guild context`);
+    }
   } catch (error) {
     // Don't block command execution if warmup fails
     logger.error('Error warming up cache:', error);
   }
+
   
   const command = client.commands.get(interaction.commandName);
 

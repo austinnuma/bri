@@ -122,6 +122,12 @@ function generateCacheKey(table, params, guildId) {
  * @returns {Promise<Object>} - User data
  */
 export async function getCachedUser(userId, guildId) {
+  // Guard against missing parameters
+  if (!userId || !guildId) {
+    logger.warn(`getCachedUser called with missing parameters: userId=${userId}, guildId=${guildId}`);
+    throw new Error("Both userId and guildId are required for getCachedUser");
+  }
+  
   const cacheKey = `user:${userId}:${guildId}`;
   
   // Check cache first
@@ -484,6 +490,12 @@ export async function cachedVectorSearch(userId, embedding, options = {}) {
  */
 export async function warmupUserCache(userId, guildId) {
   try {
+    // Guard against missing guildId
+    if (!guildId) {
+      logger.warn(`warmupUserCache called without guildId for user ${userId}`);
+      return; // Exit early rather than causing database errors
+    }
+    
     // Fetch user data
     await getCachedUser(userId, guildId);
     

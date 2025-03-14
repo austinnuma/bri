@@ -141,7 +141,7 @@ async function handleImageAttachments(message, cleanedContent, guildId) {
     const imageUrls = imageAttachments.map(attachment => attachment.url);
     
     // Get conversation history for this user to provide context
-    const conversationHistory = userConversations.get(`${message.author.id}:${guildId}`) || [];
+    let conversationHistory = userConversations.get(`${message.author.id}:${guildId}`) || [];
     
     // Use the enhanced analyzeImages function with conversation context
     const imageDescription = await analyzeImages(
@@ -263,6 +263,11 @@ export async function handleLegacyMessage(message) {
     // Clean the content if it has the prefix
     if (hasPrefix) {
       cleanedContent = message.content.replace(prefixRegex, '').trim();
+    }
+  } else {
+    // Skip processing messages that start with :: in designated channels
+    if (message.content.startsWith('::')) {
+      return; // Silently ignore these messages
     }
   }
   

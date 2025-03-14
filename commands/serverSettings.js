@@ -10,7 +10,6 @@ import { logger } from '../utils/logger.js';
 export const data = new SlashCommandBuilder()
   .setName('server-settings')
   .setDescription('Configure Bri for this server')
-  .setDefaultMemberPermissions(PermissionFlagsBits.ManageGuild)
   // Set prefix subcommand
   .addSubcommand(subcommand =>
     subcommand
@@ -61,6 +60,11 @@ export const data = new SlashCommandBuilder()
 export async function execute(interaction) {
   if (!interaction.guild) {
     return interaction.reply({ content: 'This command can only be used in a server.', ephemeral: true });
+  }
+
+  // Manually check if the user has the ManageGuild permission
+  if (!interaction.member.permissions.has(PermissionFlagsBits.ManageGuild)) {
+    return interaction.reply({ content: 'You do not have permission to use this command. (Requires Manage Server)', ephemeral: true });
   }
 
   // Defer reply to avoid timeout

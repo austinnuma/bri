@@ -40,7 +40,7 @@ export async function execute(interaction) {
     const userId = interaction.user.id;
     
     // Get current settings
-    const currentSettings = getPersonality(userId);
+    const currentSettings = getPersonality(userId, guildId);
     
     // Get new settings from options
     const verbosity = interaction.options.getInteger('verbosity');
@@ -63,7 +63,7 @@ export async function execute(interaction) {
     };
     
     // Save settings
-    setPersonalityPreference(userId, updatedSettings);
+    setPersonalityPreference(userId, guildId, updatedSettings);
     
     // Confirm changes
     const reply = `I've updated how I'll respond to you!\n\n${formatCurrentSettings(updatedSettings)}`;

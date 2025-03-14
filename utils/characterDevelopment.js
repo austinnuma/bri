@@ -459,6 +459,7 @@ If no clear interest is detected, return {"interestDetected": false}
  * @param {Object} interestData - Interest data from analysis
  */
 async function updateOrCreateInterest(interestName, interestData) {
+  let updatedInterest; // To store the updated or created interest
   try {
     // Check if interest already exists
     const { data: existingInterest, error } = await supabase
