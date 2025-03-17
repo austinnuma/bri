@@ -504,8 +504,10 @@ async function summarizeAndExtract(userId, conversation, guildId) {
       return;
     }
     
-    // Use the enhanced two-stage memory extraction
-    const extractedFacts = await enhancedMemoryExtraction(userId, conversationCopy, guildId);
+    const serverConfig = await getServerConfig(guildId);
+    const botName = serverConfig.botName || "Bri";
+    // Use the enhanced two-stage memory extraction - now passing guildId AND botName
+    const extractedFacts = await enhancedMemoryExtraction(userId, conversationCopy, guildId, botName);
     
     // Also analyze the conversation for interests after summarization - with guild context
     analyzeConversationForInterests(userId, conversation, guildId).catch(err => {
@@ -518,7 +520,7 @@ async function summarizeAndExtract(userId, conversation, guildId) {
       return;
     }
     
-    // Insert memories with medium-high confidence
+    // Rest of the function remains unchanged
     logger.info(`Extracted ${extractedFacts.length} new memories for user ${userId} in guild ${guildId}`);
     
     // Process all facts as a batch

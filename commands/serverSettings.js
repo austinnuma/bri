@@ -1,11 +1,16 @@
 // commands/serverSettings.js
-import { SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
+import { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder } from 'discord.js';
 import { 
   getServerConfig, 
   updateServerConfig, 
   isFeatureEnabled
 } from '../utils/serverConfigManager.js';
 import { logger } from '../utils/logger.js';
+import { 
+  getServerCredits, 
+  DEFAULT_FREE_MONTHLY_CREDITS,
+  CREDIT_COSTS
+} from '../utils/creditManager.js';
 
 export const data = new SlashCommandBuilder()
   .setName('server-settings')
@@ -32,7 +37,8 @@ export const data = new SlashCommandBuilder()
             { name: 'Quotes', value: 'quotes' },
             { name: 'Memory', value: 'memory' },
             { name: 'Reminders', value: 'reminders' },
-            { name: 'Character Development', value: 'character' }
+            { name: 'Character Development', value: 'character' },
+            { name: 'Credit System', value: 'credits' }
           ))
       .addBooleanOption(option =>
         option.setName('enabled')
@@ -55,7 +61,12 @@ export const data = new SlashCommandBuilder()
   .addSubcommand(subcommand =>
     subcommand
       .setName('view')
-      .setDescription('View current server settings'));
+      .setDescription('View current server settings'))
+  // View credits subcommand
+  .addSubcommand(subcommand =>
+    subcommand
+      .setName('credits')
+      .setDescription('View server credit information'));
 
 export async function execute(interaction) {
   if (!interaction.guild) {
@@ -91,6 +102,12 @@ export async function execute(interaction) {
         
         // Update the specific feature
         enabledFeatures[feature] = enabled;
+        
+        // Special handling for credit system
+        if (feature === 'credits') {
+          await updateServerConfig(guildId, { credits_enabled: enabled });
+          return interaction.editReply(`Credit system is now ${enabled ? 'enabled' : 'disabled'}`);
+        }
         
         // Save the updated features
         await updateServerConfig(guildId, { enabled_features: enabledFeatures });
@@ -146,6 +163,10 @@ export async function execute(interaction) {
               value: config.prefix || 'bri'
             },
             {
+              name: 'Credit System',
+              value: config.credits_enabled ? '✅ Enabled' : '❌ Disabled'
+            },
+            {
               name: 'Features',
               value: featuresText || 'No features configured'
             },
@@ -161,9 +182,97 @@ export async function execute(interaction) {
         
         return interaction.editReply({ embeds: [settingsEmbed] });
       }
+
+      case 'credits': {
+        // Get credit information
+        const credits = await getServerCredits(guildId);
+        
+        if (!credits) {
+          return interaction.editReply('Unable to retrieve credit information for this server.');
+        }
+        
+        // Format dates
+        const lastRefreshDate = new Date(credits.last_free_refresh).toLocaleDateString();
+        const nextRefreshDate = new Date(credits.next_free_refresh).toLocaleDateString();
+        
+        // Create a credit usage breakdown
+        const creditUsageBreakdown = Object.entries(CREDIT_COSTS)
+          .map(([operation, cost]) => `• ${formatOperationName(operation)}: ${cost} credits`)
+          .join('\n');
+        
+        // Create the embed
+        const creditsEmbed = new EmbedBuilder()
+          .setTitle('Bri Credits System')
+          .setDescription(`Credit information for this server (ID: ${guildId})`)
+          .setColor(0x00AAFF)
+          .addFields(
+            {
+              name: '💰 Available Credits',
+              value: `${credits.remaining_credits} credits`,
+              inline: true
+            },
+            {
+              name: '🔄 Free Monthly Credits',
+              value: `${DEFAULT_FREE_MONTHLY_CREDITS} credits`,
+              inline: true
+            },
+            {
+              name: '📊 Total Used Credits',
+              value: `${credits.total_used_credits} credits`,
+              inline: true
+            },
+            {
+              name: '⏱️ Last Free Credit Refresh',
+              value: lastRefreshDate,
+              inline: true
+            },
+            {
+              name: '📆 Next Free Credit Refresh',
+              value: nextRefreshDate,
+              inline: true
+            },
+            {
+              name: '💎 Purchased Credits',
+              value: `${credits.credits_purchased} credits`,
+              inline: true
+            },
+            {
+              name: '💸 Credit Usage Rates',
+              value: creditUsageBreakdown
+            }
+          )
+          .setFooter({ 
+            text: 'Purchase more credits on the Bri website. Free credits refresh on the 1st of each month.'
+          });
+        
+        // Get server config to check if credits are enabled
+        const config = await getServerConfig(guildId);
+        
+        if (!config.credits_enabled) {
+          creditsEmbed.addFields({
+            name: '⚠️ Credit System Disabled',
+            value: 'The credit system is currently disabled for this server. Use `/server-settings toggle feature:credits enabled:true` to enable it.'
+          });
+        }
+        
+        return interaction.editReply({ embeds: [creditsEmbed] });
+      }
     }
   } catch (error) {
     logger.error('Error in server-settings command:', error);
     return interaction.editReply('An error occurred while updating server settings.');
   }
+}
+
+/**
+ * Format operation name for display
+ * @param {string} operation - The operation type
+ * @returns {string} - Formatted operation name
+ */
+function formatOperationName(operation) {
+  // Convert SNAKE_CASE to Title Case
+  return operation
+    .split('_')
+    .map(word => word.charAt(0) + word.slice(1).toLowerCase())
+    .join(' ');
 }

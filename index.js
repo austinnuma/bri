@@ -16,6 +16,7 @@ import { scheduleMemoryMaintenance, runMemoryMaintenance } from './utils/memoryM
 import { initializeTimeSystem, startTimeEventProcessing } from './utils/timeSystem.js';
 import { initializeJournalSystem, createRandomJournalEntry } from './utils/journalSystem.js';
 import { migrateGlobalJournalChannel, migrateJournalChannels } from './utils/migrateJournalChannels.js';
+import { initializeCreditSystem } from './utils/creditManager.js';
 
 
 // Initialize Discord client with the required intents
@@ -306,6 +307,14 @@ async function testDatabaseAccess() {
 client.once('ready', async () => {
   logger.info(`Logged in as ${client.user.tag}!`);
   
+  // Initialize credit system
+  try {
+    await initializeCreditSystem();
+    logger.info("Credit system initialized");
+  } catch (error) {
+    logger.error("Error initializing credit system:", error);
+  }
+
   // Register slash commands
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
   
@@ -511,6 +520,37 @@ client.on('messageCreate', async (message) => {
     await handleLegacyMessage(message);
   } catch (error) {
     logger.error('Error in legacy message handler:', error);
+  }
+});
+
+// Welcome message when Bri is added to a new server
+client.on('guildCreate', async (guild) => {
+  // Try to use the system channel first
+  let defaultChannel = guild.systemChannel;
+
+  // If no system channel, look for a text channel where the bot can send messages
+  if (!defaultChannel) {
+    defaultChannel = guild.channels.cache.find(channel =>
+      channel.isTextBased() &&
+      channel.permissionsFor(guild.members.me)?.has('SendMessages')
+    );
+  }
+
+  if (!defaultChannel) {
+    logger.warn(`No appropriate channel found to send welcome message in guild ${guild.id}`);
+    return;
+  }
+
+  const welcomeMessage = `Hi there! I'm Bri, your friendly AI assistant created by austin.
+I'm a helpful 14-year-old girl with long-term memory, always here to provide useful, accurate answers.
+I'm super excited to help out, chat, and share some lighthearted humor.
+Let me know how I can assist you today!`;
+
+  try {
+    await defaultChannel.send(welcomeMessage);
+    logger.info(`Welcome message sent in guild ${guild.id}`);
+  } catch (err) {
+    logger.error(`Failed to send welcome message in guild ${guild.id}:`, err);
   }
 });
 

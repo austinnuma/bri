@@ -1,9 +1,13 @@
 import { SlashCommandBuilder } from '@discordjs/builders';
-import { AttachmentBuilder } from 'discord.js';
+import { AttachmentBuilder, EmbedBuilder } from 'discord.js';
 import { logger } from '../utils/logger.js';
 
 // Import the image generation function
 import { generateImageFromPrompt } from '../services/combinedServices.js';
+
+// Import credit management functions
+import { hasEnoughCredits, useCredits, CREDIT_COSTS, getServerCredits } from '../utils/creditManager.js';
+import { getServerConfig } from '../utils/serverConfigManager.js';
 
 export const data = new SlashCommandBuilder()
   .setName('draw')
@@ -51,6 +55,56 @@ export async function execute(interaction) {
       return;
     }
     
+    // Get guild ID for credit checks
+    const guildId = interaction.guildId;
+    
+    // Check if this server has credits enabled
+    const serverConfig = await getServerConfig(guildId);
+    const creditsEnabled = serverConfig?.credits_enabled === true;
+    
+    // If credits are enabled, check if there are enough credits
+    if (creditsEnabled) {
+      // Calculate total cost (base cost * number of images)
+      const operationType = 'IMAGE_GENERATION';
+      const totalCost = CREDIT_COSTS[operationType] * count;
+      
+      // Check if server has enough credits
+      const hasCredits = await hasEnoughCredits(guildId, operationType);
+      
+      if (!hasCredits) {
+        // Get current credit information for a more helpful message
+        const credits = await getServerCredits(guildId);
+        
+        const creditsEmbed = new EmbedBuilder()
+          .setTitle('Insufficient Credits')
+          .setDescription(`This server doesn't have enough credits to generate ${count} image${count > 1 ? 's' : ''}.`)
+          .setColor(0xFF0000)
+          .addFields(
+            {
+              name: '💰 Available Credits',
+              value: `${credits?.remaining_credits || 0} credits`,
+              inline: true
+            },
+            {
+              name: '💸 Required Credits',
+              value: `${totalCost} credits`,
+              inline: true
+            },
+            {
+              name: '📊 Credit Cost',
+              value: `Image generation costs ${CREDIT_COSTS[operationType]} credits per image.`,
+              inline: true
+            }
+          )
+          .setFooter({ 
+            text: 'Purchase more credits on the Bri website or wait for your monthly refresh.'
+          });
+          
+        await interaction.editReply({ embeds: [creditsEmbed], ephemeral: true });
+        return;
+      }
+    }
+    
     logger.info(`User ${interaction.user.id} requested image generation: "${prompt}", count: ${count}, safety: ${safety}`);
     
     // Call the image generation service
@@ -60,6 +114,17 @@ export async function execute(interaction) {
       if (!imageBuffers || imageBuffers.length === 0) {
         await interaction.editReply("Sorry, I couldn't generate any images right now. Try again later!");
         return;
+      }
+      
+      // If credits are enabled, use credits AFTER successful generation
+      if (creditsEnabled) {
+        // Deduct credits for each successfully generated image
+        for (let i = 0; i < imageBuffers.length; i++) {
+          await useCredits(guildId, 'IMAGE_GENERATION');
+        }
+        
+        // Log credit usage
+        logger.info(`Used ${CREDIT_COSTS['IMAGE_GENERATION'] * imageBuffers.length} credits for image generation in server ${guildId}`);
       }
       
       // Create attachments from all image buffers

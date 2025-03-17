@@ -14,18 +14,19 @@ import { enhancedSummarizeConversation } from './summarization.js';
  * @param {string} botName - The name of the bot (e.g., "Bri")
  * @returns {Array<string>} - Filtered and improved facts
  */
-function postProcessExtractedFacts(facts) {
+function postProcessExtractedFacts(facts, botName = "Bri") {
   // Convert bot name to lowercase for case-insensitive comparison
   const botNameLower = botName.toLowerCase();
+  
   // Filter out problematic patterns
   const filteredFacts = facts.filter(fact => {
-  const lowercaseFact = fact.toLowerCase();
-
-  // Filter out potential bot name misidentification
-  // Only keep "User's name is Bri" if it contains strong evidence markers
-  if (lowercaseFact.includes(`name is ${botNameLower}`) || 
-    lowercaseFact.includes(`named ${botNameLower}`) ||
-    (lowercaseFact.includes('name') && lowercaseFact.includes(botNameLower))) {
+    const lowercaseFact = fact.toLowerCase();
+    
+    // Filter out potential bot name misidentification
+    // Only keep "User's name is Bri" if it contains strong evidence markers
+    if (lowercaseFact.includes(`name is ${botNameLower}`) || 
+        lowercaseFact.includes(`named ${botNameLower}`) ||
+        (lowercaseFact.includes('name') && lowercaseFact.includes(botNameLower))) {
       
       // Check if there's strong evidence this is correct (e.g., direct quotation)
       const hasStrongEvidence = 
@@ -103,23 +104,23 @@ function postProcessExtractedFacts(facts) {
   });
 }
 
-
 /**
  * Two-stage memory extraction that first summarizes then infers preferences
  * @param {string} userId - User ID
  * @param {Array} conversation - Conversation history
+ * @param {string} guildId - Guild ID for multi-server support
  * @param {string} botName - Name of the bot (default: "Bri")
  * @returns {Promise<Array<string>>} - Extracted memories
  */
-export async function enhancedMemoryExtraction(userId, conversation, botName = "Bri") {
+export async function enhancedMemoryExtraction(userId, conversation, guildId, botName = "Bri") {
   try {
-    logger.info(`Running enhanced two-stage memory extraction for user ${userId}`);
+    logger.info(`Running enhanced two-stage memory extraction for user ${userId} in guild ${guildId}`);
     
     // Step 1: Generate conversation summary
     // Pass bot name to summarization function if it supports it
     const summary = await enhancedSummarizeConversation(conversation, botName);
     if (!summary) {
-      logger.warn(`Failed to generate summary for user ${userId}`);
+      logger.warn(`Failed to generate summary for user ${userId} in guild ${guildId}`);
       return [];
     }
     
@@ -133,13 +134,14 @@ export async function enhancedMemoryExtraction(userId, conversation, botName = "
     const allExtractions = [...explicitFacts, ...impliedPreferences];
     
     // Post-process to filter, normalize, and deduplicate
+    // Make sure to pass the botName parameter here
     const filteredExtractions = postProcessExtractedFacts(allExtractions, botName);
     const deduplicatedFacts = await deduplicateAgainstExisting(filteredExtractions, userId);
     
-    logger.info(`Extracted ${deduplicatedFacts.length} memories for user ${userId}`);
+    logger.info(`Extracted ${deduplicatedFacts.length} memories for user ${userId} in guild ${guildId}`);
     return deduplicatedFacts;
   } catch (error) {
-    logger.error(`Error in enhanced memory extraction for user ${userId}:`, error);
+    logger.error(`Error in enhanced memory extraction for user ${userId}: ${error}`, error);
     return [];
   }
 }
