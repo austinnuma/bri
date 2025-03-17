@@ -415,6 +415,15 @@ If no clear interest is detected, return {"interestDetected": false}
  */
 async function trackPotentialInterest(interestName, interestData, userId, guildId) {
   try {
+    // Log the parameters to help with debugging
+    logger.info(`Tracking potential interest: "${interestName}" for user ${userId} in guild ${guildId}`);
+    
+    // Validate the guild ID
+    if (!guildId) {
+      logger.error(`Invalid guild ID provided to trackPotentialInterest for interest: ${interestName}`);
+      return false;
+    }
+    
     // Check if this is already a full interest for this guild
     const { data: existingGuildInterest, error: guildCheckError } = await supabase
       .from('bri_guild_interests')
@@ -425,7 +434,15 @@ async function trackPotentialInterest(interestName, interestData, userId, guildI
       
     if (!guildCheckError && existingGuildInterest) {
       // It's already a full interest for this guild, just update it
-      await updateGuildInterest(guildId, existingGuildInterest.interest_id, interestData);
+      logger.info(`Interest "${interestName}" already exists for guild ${guildId}, updating it`);
+      
+      // Use updateOrCreateGuildInterest instead of the undefined updateGuildInterest
+      await updateOrCreateGuildInterest(
+        guildId, 
+        existingGuildInterest.interest_id, 
+        interestData,
+        userId
+      );
       return true;
     }
     
@@ -442,6 +459,8 @@ async function trackPotentialInterest(interestName, interestData, userId, guildI
     
     if (!potentialInterest) {
       // New potential interest
+      logger.info(`Creating new potential interest "${interestName}" for guild ${guildId}`);
+      
       await supabase.from('bri_potential_interests').insert({
         name: interestName,
         guild_id: guildId,
@@ -506,19 +525,45 @@ async function trackPotentialInterest(interestName, interestData, userId, guildI
  */
 async function convertToFullInterest(interestName, interestData, guildId, userId) {
   try {
+    // Validate the guild ID
+    if (!guildId) {
+      logger.error(`Invalid guild ID provided to convertToFullInterest for interest: ${interestName}`);
+      return false;
+    }
+    
+    logger.info(`Converting interest "${interestName}" to full interest for guild ${guildId}`);
+    
     // Create or update the global interest
     const globalInterest = await updateOrCreateInterest(interestName, interestData);
-    if (!globalInterest) return false;
+    if (!globalInterest) {
+      logger.error(`Failed to update or create global interest: ${interestName}`);
+      return false;
+    }
     
-    // Create the guild-specific interest mapping
-    await updateOrCreateGuildInterest(guildId, globalInterest.id, interestData, userId);
+    logger.info(`Global interest created/updated: ${globalInterest.id} - ${globalInterest.name}`);
+    
+    // Create the guild-specific interest mapping with explicit guild_id parameter
+    const guildInterest = await updateOrCreateGuildInterest(guildId, globalInterest.id, interestData, userId);
+    
+    if (!guildInterest) {
+      logger.error(`Failed to create guild-specific interest for: ${interestName}, guild: ${guildId}`);
+      return false;
+    }
+    
+    logger.info(`Successfully created guild interest: ${guildInterest.id} for guild ${guildId}`);
     
     // Clean up the potential interest
-    await supabase.from('bri_potential_interests')
+    const { error: deleteError } = await supabase.from('bri_potential_interests')
       .delete()
       .eq('guild_id', guildId)
       .eq('name', interestName);
       
+    if (deleteError) {
+      logger.warn(`Could not delete potential interest for ${interestName} in guild ${guildId}: ${deleteError.message}`);
+    } else {
+      logger.info(`Deleted potential interest for ${interestName} in guild ${guildId}`);
+    }
+    
     return true;
   } catch (error) {
     logger.error(`Error converting potential interest ${interestName}:`, error);

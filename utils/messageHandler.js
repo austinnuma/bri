@@ -251,12 +251,11 @@ async function handleImageAttachments(message, cleanedContent, guildId) {
   }
 }
 
-/**
- * Handles legacy (non-slash) messages.
- * Processes images, memory commands, user queries, and normal chat.
- *
- * @param {Message} message - The Discord message object.
- */
+// The issue is that we're trying to update the conversation with Bri's response after the try/catch block,
+// but the 'reply' variable is only defined within the try block.
+
+// The handleLegacyMessage function should be restructured as follows:
+
 export async function handleLegacyMessage(message) {
   // Skip bot messages
   if (message.author.bot) return;
@@ -460,7 +459,7 @@ export async function handleLegacyMessage(message) {
     // Apply emoticons
     reply = replaceEmoticons(reply);
 
-    // Update conversation with Bri's response
+    // Update conversation with Bri's response - MOVED INSIDE try block
     conversation.push({ role: "assistant", content: reply });
     
     // Get dynamic prompt directly from database
@@ -476,7 +475,29 @@ export async function handleLegacyMessage(message) {
       logger.error("Error updating user mapping", { error: err });
     });
 
-    // Memory extraction if memory feature is enabled
+    // If the response was successful, use credits for this chat message
+    if (serverConfig?.credits_enabled) {
+      await useCredits(guildId, 'CHAT_MESSAGE');
+      logger.debug(`Used ${CREDIT_COSTS['CHAT_MESSAGE']} credits for chat message in server ${guildId}`);
+    }
+
+    // Split and send the reply if needed
+    if (reply.length > 2000) {
+      const chunks = splitMessage(reply, 2000);
+      for (const chunk of chunks) {
+        await message.channel.send(chunk);
+      }
+    } else {
+      // Always use reply() for replies to the bot's messages to maintain the thread
+      const isReplyToBot = message.reference && message.reference.messageId;
+      if (isDesignated || isReplyToBot) {
+        await message.reply(reply);
+      } else {
+        await message.channel.send(reply);
+      }
+    }
+
+    // Memory extraction if memory feature is enabled - still inside try block
     if (memoryEnabled) {
       // Increment message counter for this user - now with guild context
       const userGuildCounterKey = `${message.author.id}:${guildId}`;
@@ -504,32 +525,12 @@ export async function handleLegacyMessage(message) {
       }
     }
 
-    // If the response was successful, use credits for this chat message
-    const serverConfig = await getServerConfig(guildId);
-    if (serverConfig?.credits_enabled) {
-      await useCredits(guildId, 'CHAT_MESSAGE');
-      logger.debug(`Used ${CREDIT_COSTS['CHAT_MESSAGE']} credits for chat message in server ${guildId}`);
-    }
-
-    // Split and send the reply if needed
-    if (reply.length > 2000) {
-      const chunks = splitMessage(reply, 2000);
-      for (const chunk of chunks) {
-        await message.channel.send(chunk);
-      }
-    } else {
-      // Always use reply() for replies to the bot's messages to maintain the thread
-      const isReplyToBot = message.reference && message.reference.messageId;
-      if (isDesignated || isReplyToBot) {
-        await message.reply(reply);
-      } else {
-        await message.channel.send(reply);
-      }
-    }
   } catch (error) {
     logger.error("Error in message handler", { error, guildId });
     await message.channel.send("Sorry, an error occurred processing your message.");
   }
+
+  // No code should be here that depends on variables defined within the try block
 }
 
 /**
