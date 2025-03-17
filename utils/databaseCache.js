@@ -497,11 +497,11 @@ export async function warmupUserCache(userId, guildId) {
     }
     
     // Fetch user data
-    await getCachedUser(userId, guildId);
+    //await getCachedUser(userId, guildId);
     
     // Fetch commonly accessed memory types
-    await getCachedMemories(userId, guildId);
-    await getCachedMemories(userId, guildId, { type: 'explicit'});
+    //await getCachedMemories(userId, guildId);
+    //await getCachedMemories(userId, guildId, { type: 'explicit'});
     
     logger.debug(`Warmed up cache for user ${userId} in guild ${guildId}`);
   } catch (error) {

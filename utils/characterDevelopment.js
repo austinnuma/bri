@@ -58,6 +58,11 @@ const INITIAL_INTERESTS = [
   }
 ];
 
+// Table to track potential interests before they become actual interests
+const MENTION_THRESHOLD = 3;  // Number of mentions needed to become an interest
+const ENTHUSIASM_THRESHOLD = 0.8;  // Threshold for immediate interest adoption (0-1)
+
+
 // Initial storyline goals/events
 const INITIAL_STORYLINE = [
   {
@@ -213,71 +218,6 @@ async function checkTablesExist() {
   }
 }
 
-/**
- * Manually creates tables if RPC method fails
- */
-async function manuallyCreateTables() {
-  // Create interests table
-  const { error: interestsError } = await supabase.query(`
-    CREATE TABLE IF NOT EXISTS bri_interests (
-      id SERIAL PRIMARY KEY,
-      name TEXT NOT NULL,
-      level INTEGER NOT NULL DEFAULT 1,
-      description TEXT,
-      facts JSONB,
-      tags JSONB,
-      last_discussed TIMESTAMP WITH TIME ZONE,
-      share_threshold FLOAT DEFAULT 0.5,
-      embedding VECTOR(1536)
-    );
-  `);
-  
-  if (interestsError) {
-    logger.warn("Manual creation of interests table failed, but this is expected if using Supabase: ", interestsError);
-  }
-  
-  // Create storyline table
-  const { error: storylineError } = await supabase.query(`
-    CREATE TABLE IF NOT EXISTS bri_storyline (
-      id TEXT PRIMARY KEY,
-      title TEXT NOT NULL,
-      description TEXT,
-      status TEXT NOT NULL,
-      start_date TIMESTAMP WITH TIME ZONE,
-      end_date TIMESTAMP WITH TIME ZONE,
-      progress FLOAT DEFAULT 0,
-      updates JSONB,
-      share_threshold FLOAT DEFAULT 0.5,
-      embedding VECTOR(1536)
-    );
-  `);
-  
-  if (storylineError) {
-    logger.warn("Manual creation of storyline table failed, but this is expected if using Supabase: ", storylineError);
-  }
-  
-  // Create relationships table
-  const { error: relationshipsError } = await supabase.query(`
-    CREATE TABLE IF NOT EXISTS bri_relationships (
-      user_id TEXT PRIMARY KEY,
-      level INTEGER NOT NULL DEFAULT 0,
-      interaction_count INTEGER DEFAULT 0,
-      last_interaction TIMESTAMP WITH TIME ZONE,
-      shared_interests JSONB,
-      conversation_topics JSONB,
-      inside_jokes JSONB,
-      created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
-      updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
-    );
-  `);
-  
-  if (relationshipsError) {
-    logger.warn("Manual creation of relationships table failed, but this is expected if using Supabase: ", relationshipsError);
-  }
-  
-  // Seed initial data
-  await seedInitialCharacterData();
-}
 
 /**
  * Seeds the database with initial character data
@@ -384,9 +324,10 @@ async function seedInitialCharacterData() {
  * Analyzes conversation to potentially discover new interests for Bri
  * @param {string} userId - The user's ID
  * @param {Array} conversation - The conversation history
+ * @param {string} guildId - The guild ID
  * @returns {Promise<boolean>} - Whether any new interests were discovered
  */
-export async function analyzeConversationForInterests(userId, conversation) {
+export async function analyzeConversationForInterests(userId, conversation, guildId) {
   try {
     // Extract only user messages from recent conversation (last 5 messages)
     const userMessages = conversation
@@ -410,6 +351,7 @@ If you detect a genuine interest, extract:
 2. A brief description of what it involves
 3. Any specific facts mentioned about it
 4. Related keywords/tags
+5. ENTHUSIASM_SCORE: A number from 0-1 indicating how enthusiastic the user seems (0=passing mention, 1=extremely passionate)
 
 Conversation: ${userMessages}
 
@@ -420,7 +362,8 @@ Format your response as JSON:
     "name": "interest name",
     "description": "brief description",
     "facts": ["fact 1", "fact 2"],
-    "tags": ["tag1", "tag2"]
+    "tags": ["tag1", "tag2"],
+    "enthusiasmScore": 0.7
   }
 }
 
@@ -438,12 +381,21 @@ If no clear interest is detected, return {"interestDetected": false}
     if (analysisResult.interestDetected) {
       // Check if this interest already exists
       const interestName = analysisResult.interest.name.toLowerCase();
-      await updateOrCreateInterest(interestName, analysisResult.interest);
       
-      // Record this shared interest in the user's relationship
-      await updateRelationshipWithSharedInterest(userId, interestName);
+      // Track this potential interest
+      const interestAdopted = await trackPotentialInterest(
+        interestName, 
+        analysisResult.interest, 
+        userId, 
+        guildId
+      );
       
-      return true;
+      if (interestAdopted) {
+        // Interest was either created or already existed
+        // Record this shared interest in the user's relationship
+        await updateRelationshipWithSharedInterest(userId, interestName, guildId);
+        return true;
+      }
     }
     
     return false;
@@ -454,9 +406,131 @@ If no clear interest is detected, return {"interestDetected": false}
 }
 
 /**
- * Updates an existing interest or creates a new one
+ * Tracks mentions of potential interests before converting to full interests
  * @param {string} interestName - Name of the interest
  * @param {Object} interestData - Interest data from analysis
+ * @param {string} userId - The user's ID
+ * @param {string} guildId - The guild ID
+ * @returns {Promise<boolean>} - Whether an interest was created/adopted
+ */
+async function trackPotentialInterest(interestName, interestData, userId, guildId) {
+  try {
+    // Check if this is already a full interest for this guild
+    const { data: existingGuildInterest, error: guildCheckError } = await supabase
+      .from('bri_guild_interests')
+      .select('*')
+      .eq('guild_id', guildId)
+      .eq('interest_name', interestName)
+      .single();
+      
+    if (!guildCheckError && existingGuildInterest) {
+      // It's already a full interest for this guild, just update it
+      await updateGuildInterest(guildId, existingGuildInterest.interest_id, interestData);
+      return true;
+    }
+    
+    // Check if it's in potential interests
+    const { data: potentialInterest, error } = await supabase
+      .from('bri_potential_interests')
+      .select('*')
+      .eq('guild_id', guildId)
+      .eq('name', interestName)
+      .single();
+      
+    const now = new Date().toISOString();
+    const isHighEnthusiasm = interestData.enthusiasmScore >= ENTHUSIASM_THRESHOLD;
+    
+    if (!potentialInterest) {
+      // New potential interest
+      await supabase.from('bri_potential_interests').insert({
+        name: interestName,
+        guild_id: guildId,
+        mention_count: 1,
+        last_mentioned: now,
+        data: interestData,
+        users_mentioned: [userId]
+      });
+      
+      logger.info(`New potential interest tracked: ${interestName} in guild ${guildId}`);
+      
+      // If high enthusiasm, immediately convert to full interest
+      if (isHighEnthusiasm) {
+        logger.info(`High enthusiasm detected (${interestData.enthusiasmScore}), immediately adopting interest: ${interestName}`);
+        return await convertToFullInterest(interestName, interestData, guildId, userId);
+      }
+      
+      return false;
+    } else {
+      // Existing potential interest
+      const uniqueUsers = new Set([...(potentialInterest.users_mentioned || []), userId]);
+      const newCount = potentialInterest.mention_count + 1;
+      
+      // Update the potential interest
+      await supabase.from('bri_potential_interests').update({
+        mention_count: newCount,
+        last_mentioned: now,
+        data: {...potentialInterest.data, ...interestData}, // Merge data
+        users_mentioned: Array.from(uniqueUsers)
+      }).eq('id', potentialInterest.id);
+      
+      logger.info(`Updated potential interest: ${interestName} in guild ${guildId}, mention count: ${newCount}`);
+      
+      // Convert to full interest if:
+      // - Mentioned MENTION_THRESHOLD or more times OR
+      // - Mentioned by 2+ different users OR
+      // - High enthusiasm detected
+      if (newCount >= MENTION_THRESHOLD || uniqueUsers.size >= 2 || isHighEnthusiasm) {
+        const reason = newCount >= MENTION_THRESHOLD ? 'mention threshold reached' :
+                      uniqueUsers.size >= 2 ? 'multiple users mentioned' :
+                      'high enthusiasm detected';
+                      
+        logger.info(`Converting potential interest to full interest (${reason}): ${interestName}`);
+        return await convertToFullInterest(interestName, interestData, guildId, userId);
+      }
+      
+      return false;
+    }
+  } catch (error) {
+    logger.error(`Error tracking potential interest ${interestName}:`, error);
+    return false;
+  }
+}
+
+/**
+ * Converts a potential interest to a full interest
+ * @param {string} interestName - Name of the interest
+ * @param {Object} interestData - Interest data from analysis
+ * @param {string} guildId - The guild ID
+ * @param {string} userId - The user ID who last mentioned it
+ * @returns {Promise<boolean>} - Whether the conversion was successful
+ */
+async function convertToFullInterest(interestName, interestData, guildId, userId) {
+  try {
+    // Create or update the global interest
+    const globalInterest = await updateOrCreateInterest(interestName, interestData);
+    if (!globalInterest) return false;
+    
+    // Create the guild-specific interest mapping
+    await updateOrCreateGuildInterest(guildId, globalInterest.id, interestData, userId);
+    
+    // Clean up the potential interest
+    await supabase.from('bri_potential_interests')
+      .delete()
+      .eq('guild_id', guildId)
+      .eq('name', interestName);
+      
+    return true;
+  } catch (error) {
+    logger.error(`Error converting potential interest ${interestName}:`, error);
+    return false;
+  }
+}
+
+/**
+ * Updates an existing interest or creates a new one (global record)
+ * @param {string} interestName - Name of the interest
+ * @param {Object} interestData - Interest data from analysis
+ * @returns {Promise<Object|null>} - Updated or created interest
  */
 async function updateOrCreateInterest(interestName, interestData) {
   let updatedInterest; // To store the updated or created interest
@@ -470,7 +544,7 @@ async function updateOrCreateInterest(interestName, interestData) {
       
     if (error && error.code !== 'PGRST116') { // PGRST116 is "no rows returned"
       logger.error("Error checking for existing interest:", error);
-      return;
+      return null;
     }
     
     // Generate embedding for search
@@ -478,19 +552,15 @@ async function updateOrCreateInterest(interestName, interestData) {
     const embedding = await getEmbedding(embeddingText);
     
     if (existingInterest) {
-      // Update existing interest
-      const combinedFacts = [...new Set([...existingInterest.facts, ...interestData.facts])];
-      const combinedTags = [...new Set([...existingInterest.tags, ...interestData.tags])];
-      
-      const newLevel = Math.min(existingInterest.level + 1, 5); // Increase interest level
+      // Update existing interest - global record only stores general data
+      const combinedFacts = [...new Set([...(existingInterest.facts || []), ...(interestData.facts || [])])];
+      const combinedTags = [...new Set([...(existingInterest.tags || []), ...(interestData.tags || [])])];
       
       const { data, error: updateError } = await supabase
         .from('bri_interests')
         .update({
-          level: newLevel,
           facts: combinedFacts,
           tags: combinedTags,
-          last_discussed: new Date().toISOString(),
           embedding: embedding
         })
         .eq('id', existingInterest.id)
@@ -500,73 +570,164 @@ async function updateOrCreateInterest(interestName, interestData) {
       if (updateError) {
         logger.error(`Error updating interest ${interestName}:`, updateError);
       } else {
-        logger.info(`Updated existing interest: ${interestName} to level ${newLevel}`);
+        logger.info(`Updated existing global interest: ${interestName}`);
         updatedInterest = data;
-        
-        // Check if the level increased enough to warrant a journal entry
-        // Create journal entry if level increased by at least 2 or reached level 4-5
-        const levelIncreased = newLevel - existingInterest.level;
-        if (levelIncreased >= 2 || newLevel >= 4) {
-          try {
-            await createInterestJournalEntry(updatedInterest, false);
-          } catch (journalError) {
-            logger.error(`Error creating journal entry for updated interest ${interestName}:`, journalError);
-          }
-        }
       }
     } else {
       // Create new interest
       const newInterest = {
         name: interestData.name.toLowerCase(),
-        level: 1,
         description: interestData.description,
-        facts: interestData.facts,
-        tags: interestData.tags,
-        last_discussed: new Date().toISOString(),
+        facts: interestData.facts || [],
+        tags: interestData.tags || [],
         share_threshold: 0.5, // Default
         embedding: embedding
       };
       
       const { data, error: insertError } = await supabase
-      .from('bri_interests')
-      .insert(newInterest)
-      .select()
-      .single();
+        .from('bri_interests')
+        .insert(newInterest)
+        .select()
+        .single();
       
-    if (insertError) {
-      logger.error(`Error creating interest ${interestName}:`, insertError);
-    } else {
-      logger.info(`Created new interest: ${interestName}`);
-      updatedInterest = data;
-      
-      // Create journal entry for new interest
-      try {
-        await createInterestJournalEntry(updatedInterest, true);
-      } catch (journalError) {
-        logger.error(`Error creating journal entry for new interest ${interestName}:`, journalError);
+      if (insertError) {
+        logger.error(`Error creating interest ${interestName}:`, insertError);
+      } else {
+        logger.info(`Created new global interest: ${interestName}`);
+        updatedInterest = data;
       }
     }
-  }
   
-  return updatedInterest;
-} catch (error) {
-  logger.error(`Error updating/creating interest ${interestName}:`, error);
-  return null;
-}
+    return updatedInterest;
+  } catch (error) {
+    logger.error(`Error updating/creating interest ${interestName}:`, error);
+    return null;
+  }
 }
 
 /**
- * Updates a user relationship with a shared interest
+ * Updates or creates a guild-specific interest relationship
+ * @param {string} guildId - The guild ID
+ * @param {number} interestId - ID of the global interest (as INTEGER)
+ * @param {Object} interestData - Interest data
+ * @param {string} userId - The user who triggered this interest
+ * @returns {Promise<Object|null>} - The guild interest or null
+ */
+async function updateOrCreateGuildInterest(guildId, interestId, interestData, userId) {
+  try {
+    // Check if guild-interest relationship exists
+    const { data: guildInterest, error } = await supabase
+      .from('bri_guild_interests')
+      .select('*')
+      .eq('guild_id', guildId)
+      .eq('interest_id', interestId)
+      .single();
+      
+    const now = new Date().toISOString();
+    
+    if (error && error.code === 'PGRST116') {
+      // Create new guild-interest relationship
+      const { data, error: insertError } = await supabase
+        .from('bri_guild_interests')
+        .insert({
+          interest_id: interestId,
+          guild_id: guildId,
+          interest_name: interestData.name.toLowerCase(),
+          level: 1,
+          last_discussed: now,
+          guild_facts: interestData.facts || [],
+          guild_tags: interestData.tags || []
+        })
+        .select()
+        .single();
+        
+      if (insertError) {
+        logger.error(`Error creating guild interest relation:`, insertError);
+        return null;
+      }
+      
+      // Create a journal entry for this guild
+      try {
+        const globalInterest = await getInterestById(interestId);
+        if (globalInterest) {
+          await createInterestJournalEntry({...globalInterest, ...data}, true, guildId);
+        }
+      } catch (journalError) {
+        logger.error(`Error creating guild journal entry for new interest:`, journalError);
+      }
+      
+      return data;
+    } else if (!error) {
+      // Update existing guild-interest relationship
+      const newLevel = Math.min(guildInterest.level + 1, 5);
+      
+      // Combine facts and tags, removing duplicates
+      const combinedFacts = [...new Set([
+        ...(guildInterest.guild_facts || []), 
+        ...(interestData.facts || [])
+      ])];
+      
+      const combinedTags = [...new Set([
+        ...(guildInterest.guild_tags || []), 
+        ...(interestData.tags || [])
+      ])];
+      
+      const { data, error: updateError } = await supabase
+        .from('bri_guild_interests')
+        .update({
+          level: newLevel,
+          last_discussed: now,
+          guild_facts: combinedFacts,
+          guild_tags: combinedTags
+        })
+        .eq('id', guildInterest.id)
+        .select()
+        .single();
+        
+      if (updateError) {
+        logger.error(`Error updating guild interest relation:`, updateError);
+        return null;
+      }
+      
+      // Create journal entry if level increased significantly
+      const levelIncreased = newLevel - guildInterest.level;
+      if (levelIncreased >= 2 || newLevel >= 4) {
+        try {
+          const globalInterest = await getInterestById(interestId);
+          if (globalInterest) {
+            await createInterestJournalEntry({...globalInterest, ...data}, false, guildId);
+          }
+        } catch (journalError) {
+          logger.error(`Error creating guild journal entry for updated interest:`, journalError);
+        }
+      }
+      
+      return data;
+    } else {
+      logger.error(`Error checking guild interest relation:`, error);
+      return null;
+    }
+  } catch (error) {
+    logger.error(`Error in updateOrCreateGuildInterest:`, error);
+    return null;
+  }
+}
+
+
+/**
+ * Updates a user relationship with a shared interest, guild-specific
  * @param {string} userId - The user's ID
  * @param {string} interestName - Name of the shared interest
+ * @param {string} guildId - The guild ID
  */
-async function updateRelationshipWithSharedInterest(userId, interestName) {
+async function updateRelationshipWithSharedInterest(userId, interestName, guildId) {
   try {
     // Get current relationship
     const { data: relationship, error } = await supabase
       .from('bri_relationships')
       .select('*')
       .eq('user_id', userId)
+      .eq('guild_id', guildId)
       .single();
       
     if (error && error.code !== 'PGRST116') {
@@ -589,13 +750,15 @@ async function updateRelationshipWithSharedInterest(userId, interestName) {
           shared_interests: sharedInterests,
           updated_at: new Date().toISOString()
         })
-        .eq('user_id', userId);
+        .eq('user_id', userId)
+        .eq('guild_id', guildId);
     } else {
       // Create new relationship
       await supabase
         .from('bri_relationships')
         .insert({
           user_id: userId,
+          guild_id: guildId,
           level: RELATIONSHIP_LEVELS.ACQUAINTANCE,
           shared_interests: [interestName],
           interaction_count: 1,
@@ -603,20 +766,97 @@ async function updateRelationshipWithSharedInterest(userId, interestName) {
         });
     }
   } catch (error) {
-    logger.error(`Error updating relationship for user ${userId}:`, error);
+    logger.error(`Error updating relationship for user ${userId} in guild ${guildId}:`, error);
   }
 }
 
 /**
- * Finds a relevant interest or storyline to share based on conversation context
+ * Gets an interest by ID
+ * @param {number} interestId - ID of the interest (as INTEGER not UUID)
+ * @returns {Promise<Object|null>} - The interest or null
+ */
+async function getInterestById(interestId) {
+  try {
+    const { data, error } = await supabase
+      .from('bri_interests')
+      .select('*')
+      .eq('id', interestId)
+      .single();
+      
+    if (error) {
+      logger.error(`Error fetching interest by ID ${interestId}:`, error);
+      return null;
+    }
+    
+    return data;
+  } catch (error) {
+    logger.error(`Error in getInterestById ${interestId}:`, error);
+    return null;
+  }
+}
+
+
+/**
+ * Gets a random interest weighted by level for a specific guild
+ * @param {string} guildId - The guild ID
+ * @returns {Promise<Object|null>} - Random interest or null
+ */
+async function getRandomWeightedGuildInterest(guildId) {
+  try {
+    const { data, error } = await supabase
+      .from('bri_guild_interests')
+      .select('*, interest:interest_id(*)')
+      .eq('guild_id', guildId);
+      
+    if (error) {
+      logger.error("Error fetching guild interests:", error);
+      return null;
+    }
+    
+    if (!data || data.length === 0) {
+      return null;
+    }
+    
+    // Map to combine global interest and guild-specific data
+    const combinedInterests = data.map(gi => ({
+      ...gi.interest,
+      guild_level: gi.level,
+      last_discussed: gi.last_discussed,
+      facts: gi.guild_facts || gi.interest.facts,
+      tags: gi.guild_tags || gi.interest.tags
+    }));
+    
+    // Weight by level (higher level = more likely to be chosen)
+    const totalWeight = combinedInterests.reduce((sum, interest) => sum + interest.guild_level, 0);
+    let randomValue = Math.random() * totalWeight;
+    
+    for (const interest of combinedInterests) {
+      randomValue -= interest.guild_level;
+      if (randomValue <= 0) {
+        return interest;
+      }
+    }
+    
+    // Fallback
+    return combinedInterests[0];
+  } catch (error) {
+    logger.error("Error getting random guild interest:", error);
+    return null;
+  }
+}
+
+
+/**
+ * Modified function to find a relevant interest or storyline to share based on conversation context
  * @param {string} userId - The user's ID
  * @param {string} messageContent - The message to find relevant content for
+ * @param {string} guildId - The guild ID
  * @returns {Promise<Object|null>} - Relevant interest or storyline to share, or null
  */
-export async function findRelevantContentToShare(userId, messageContent) {
+export async function findRelevantContentToShare(userId, messageContent, guildId) {
   try {
     // Get relationship level
-    const relationshipLevel = await getRelationshipLevel(userId);
+    const relationshipLevel = await getRelationshipLevel(userId, guildId);
     
     // Don't share personal content with strangers
     if (relationshipLevel < RELATIONSHIP_LEVELS.ACQUAINTANCE) {
@@ -631,8 +871,8 @@ export async function findRelevantContentToShare(userId, messageContent) {
       // Get embedding for message
       const messageEmbedding = await getEmbedding(messageContent);
       
-      // Find relevant interest
-      const relevantInterest = await findRelevantInterest(messageEmbedding);
+      // Find relevant interest for this guild
+      const relevantInterest = await findRelevantGuildInterest(messageEmbedding, guildId);
       if (relevantInterest && Math.random() < relevantInterest.share_threshold) {
         return {
           type: 'interest',
@@ -647,8 +887,8 @@ export async function findRelevantContentToShare(userId, messageContent) {
     const contentType = Math.random() < 0.7 ? 'interest' : 'storyline';
     
     if (contentType === 'interest') {
-      // Get a random interest weighted by level
-      const interest = await getRandomWeightedInterest();
+      // Get a random interest weighted by level for this guild
+      const interest = await getRandomWeightedGuildInterest(guildId);
       if (interest && Math.random() < interest.share_threshold) {
         return {
           type: 'interest',
@@ -656,8 +896,8 @@ export async function findRelevantContentToShare(userId, messageContent) {
         };
       }
     } else {
-      // Get a recent storyline update
-      const storyline = await getRecentStorylineUpdate();
+      // Get a recent storyline update for this guild
+      const storyline = await getRecentStorylineUpdate(guildId);
       if (storyline && Math.random() < storyline.share_threshold) {
         return {
           type: 'storyline',
@@ -694,12 +934,91 @@ function isAskingAboutBri(message) {
 }
 
 /**
- * Finds a relevant interest based on message embedding
+ * Finds relevant interests for a specific guild
  * @param {Array} messageEmbedding - Embedding of the message
+ * @param {string} guildId - The guild ID
  * @returns {Promise<Object|null>} - Matching interest or null
  */
-async function findRelevantInterest(messageEmbedding) {
+async function findRelevantGuildInterest(messageEmbedding, guildId) {
   try {
+    // First find relevant global interests
+    const { data, error } = await supabase.rpc('match_interests', {
+      query_embedding: messageEmbedding,
+      match_threshold: 0.7,
+      match_count: 5 // Get top 5 to filter by guild
+    });
+    
+    if (error) {
+      logger.error("Error in vector search for interests:", error);
+      return null;
+    }
+    
+    if (!data || data.length === 0) {
+      return null;
+    }
+    
+    // Get interest IDs
+    const interestIds = data.map(interest => interest.id);
+    
+    // Check which ones are active in this guild
+    const { data: guildInterests, error: guildError } = await supabase
+      .from('bri_guild_interests')
+      .select('*, interest:interest_id(*)')
+      .eq('guild_id', guildId)
+      .in('interest_id', interestIds);
+      
+    if (guildError) {
+      logger.error("Error fetching guild interests:", guildError);
+      return null;
+    }
+    
+    if (!guildInterests || guildInterests.length === 0) {
+      return null;
+    }
+    
+    // Order by the original embedding match order
+    const orderedGuildInterests = [];
+    for (const globalInterest of data) {
+      const matchingGuildInterest = guildInterests.find(
+        gi => gi.interest_id === globalInterest.id
+      );
+      if (matchingGuildInterest) {
+        // Combine global and guild-specific data
+        orderedGuildInterests.push({
+          ...matchingGuildInterest.interest,
+          guild_level: matchingGuildInterest.level,
+          share_threshold: matchingGuildInterest.interest.share_threshold,
+          last_discussed: matchingGuildInterest.last_discussed,
+          facts: matchingGuildInterest.guild_facts || matchingGuildInterest.interest.facts,
+          tags: matchingGuildInterest.guild_tags || matchingGuildInterest.interest.tags
+        });
+      }
+    }
+    
+    return orderedGuildInterests.length > 0 ? orderedGuildInterests[0] : null;
+  } catch (error) {
+    logger.error("Error finding relevant guild interest:", error);
+    return null;
+  }
+}
+
+/**
+ * DEPRECATED: Use findRelevantGuildInterest instead
+ * Finds a relevant interest based on message embedding
+ * @param {Array} messageEmbedding - Embedding of the message
+ * @param {string} guildId - Optional guild ID (for backward compatibility)
+ * @returns {Promise<Object|null>} - Matching interest or null
+ */
+async function findRelevantInterest(messageEmbedding, guildId = null) {
+  try {
+    // If guild ID is provided, use the new function
+    if (guildId) {
+      return await findRelevantGuildInterest(messageEmbedding, guildId);
+    }
+    
+    // Otherwise, find interests across all guilds (not ideal, but maintains backward compatibility)
+    logger.warn("findRelevantInterest called without guild ID - using global interests");
+    
     // Use vector similarity search
     const { data, error } = await supabase.rpc('match_interests', {
       query_embedding: messageEmbedding,
@@ -724,11 +1043,21 @@ async function findRelevantInterest(messageEmbedding) {
 }
 
 /**
+ * DEPRECATED: Use getRandomWeightedGuildInterest instead
  * Gets a random interest weighted by level
+ * @param {string} guildId - Optional guild ID (for backward compatibility)
  * @returns {Promise<Object|null>} - Random interest or null
  */
-async function getRandomWeightedInterest() {
+async function getRandomWeightedInterest(guildId = null) {
   try {
+    // If guild ID is provided, use the new function
+    if (guildId) {
+      return await getRandomWeightedGuildInterest(guildId);
+    }
+    
+    // Otherwise, find interests across all guilds (not ideal, but maintains backward compatibility)
+    logger.warn("getRandomWeightedInterest called without guild ID - using global interests");
+    
     const { data, error } = await supabase
       .from('bri_interests')
       .select('*');
@@ -742,19 +1071,9 @@ async function getRandomWeightedInterest() {
       return null;
     }
     
-    // Weight by level (higher level = more likely to be chosen)
-    const totalWeight = data.reduce((sum, interest) => sum + interest.level, 0);
-    let randomValue = Math.random() * totalWeight;
-    
-    for (const interest of data) {
-      randomValue -= interest.level;
-      if (randomValue <= 0) {
-        return interest;
-      }
-    }
-    
-    // Fallback
-    return data[0];
+    // Since we don't have guild-specific levels, just pick a random one
+    // We could do a more complex query to get average levels across guilds, but this is simpler
+    return data[Math.floor(Math.random() * data.length)];
   } catch (error) {
     logger.error("Error getting random interest:", error);
     return null;
@@ -762,14 +1081,16 @@ async function getRandomWeightedInterest() {
 }
 
 /**
- * Gets a recent storyline update
+ * Gets a recent storyline update for a specific guild
+ * @param {string} guildId - The guild ID
  * @returns {Promise<Object|null>} - Recent storyline event or null
  */
-async function getRecentStorylineUpdate() {
+async function getRecentStorylineUpdate(guildId) {
   try {
     const { data, error } = await supabase
       .from('bri_storyline')
       .select('*')
+      .eq('guild_id', guildId)  // Filter by guild ID
       .order('start_date', { ascending: false })
       .limit(3);
       
@@ -791,16 +1112,18 @@ async function getRecentStorylineUpdate() {
 }
 
 /**
- * Gets the current relationship level with a user
+ * Gets the current relationship level with a user in a specific guild
  * @param {string} userId - The user's ID
+ * @param {string} guildId - The guild ID
  * @returns {Promise<number>} - Relationship level (0-4)
  */
-export async function getRelationshipLevel(userId) {
+export async function getRelationshipLevel(userId, guildId) {
   try {
     const { data, error } = await supabase
       .from('bri_relationships')
       .select('level')
       .eq('user_id', userId)
+      .eq('guild_id', guildId)
       .single();
       
     if (error) {
@@ -822,15 +1145,17 @@ export async function getRelationshipLevel(userId) {
  * Updates a user's relationship after an interaction
  * @param {string} userId - The user's ID
  * @param {string} messageContent - The message content
+ * @param {string} guildId - The guild ID
  * @returns {Promise<Object>} - Updated relationship data
  */
-export async function updateRelationshipAfterInteraction(userId, messageContent) {
+export async function updateRelationshipAfterInteraction(userId, messageContent, guildId) {
   try {
     // Get current relationship
     const { data: relationship, error } = await supabase
       .from('bri_relationships')
       .select('*')
       .eq('user_id', userId)
+      .eq('guild_id', guildId)
       .single();
       
     const now = new Date().toISOString();
@@ -881,6 +1206,7 @@ export async function updateRelationshipAfterInteraction(userId, messageContent)
           updated_at: now
         })
         .eq('user_id', userId)
+        .eq('guild_id', guildId)
         .select()
         .single();
         
@@ -896,6 +1222,7 @@ export async function updateRelationshipAfterInteraction(userId, messageContent)
         .from('bri_relationships')
         .insert({
           user_id: userId,
+          guild_id: guildId,
           level: RELATIONSHIP_LEVELS.STRANGER,
           interaction_count: 1,
           last_interaction: now,
@@ -984,15 +1311,16 @@ function updateConversationTopics(existingTopics, newTopics) {
 }
 
 /**
- * Analyzes message for potential inside jokes
+ * Detects and stores inside jokes from conversation with guild context
  * @param {string} userId - The user's ID
  * @param {string} messageContent - The message content
+ * @param {string} guildId - The guild ID
  * @returns {Promise<boolean>} - Whether an inside joke was detected
  */
-export async function detectAndStoreInsideJoke(userId, messageContent) {
+export async function detectAndStoreInsideJoke(userId, messageContent, guildId) {
   try {
     // Only analyze for inside jokes with closer relationships
-    const relationshipLevel = await getRelationshipLevel(userId);
+    const relationshipLevel = await getRelationshipLevel(userId, guildId);
     if (relationshipLevel < RELATIONSHIP_LEVELS.FRIENDLY) {
       return false;
     }
@@ -1041,8 +1369,8 @@ If no inside joke is detected, return {"isInsideJoke": false}
     const result = JSON.parse(completion.choices[0].message.content);
     
     if (result.isInsideJoke) {
-      // Store inside joke in relationship
-      await storeInsideJoke(userId, result.joke);
+      // Store inside joke in relationship with guild context
+      await storeInsideJoke(userId, result.joke, guildId);
       return true;
     }
     
@@ -1054,17 +1382,19 @@ If no inside joke is detected, return {"isInsideJoke": false}
 }
 
 /**
- * Stores an inside joke for a user relationship
+ * Stores an inside joke for a user relationship with guild context
  * @param {string} userId - The user's ID
  * @param {Object} joke - The joke data
+ * @param {string} guildId - The guild ID
  */
-async function storeInsideJoke(userId, joke) {
+async function storeInsideJoke(userId, joke, guildId) {
   try {
     // Get current relationship
     const { data: relationship, error } = await supabase
       .from('bri_relationships')
       .select('inside_jokes')
       .eq('user_id', userId)
+      .eq('guild_id', guildId)
       .single();
       
     if (error) {
@@ -1088,27 +1418,30 @@ async function storeInsideJoke(userId, joke) {
         inside_jokes: insideJokes,
         updated_at: new Date().toISOString()
       })
-      .eq('user_id', userId);
+      .eq('user_id', userId)
+      .eq('guild_id', guildId);
       
-    logger.info(`Stored inside joke for user ${userId}`);
+    logger.info(`Stored inside joke for user ${userId} in guild ${guildId}`);
   } catch (error) {
     logger.error("Error storing inside joke:", error);
   }
 }
 
 /**
- * Generates a personalized response based on relationship level and shared interests
+ * Personalize response based on relationship with user in specific guild
  * @param {string} userId - The user's ID
- * @param {string} baseResponse - The base response from the AI
+ * @param {string} baseResponse - The base response to personalize
+ * @param {string} guildId - The guild ID
  * @returns {Promise<string>} - Personalized response
  */
-export async function personalizeResponse(userId, baseResponse) {
+export async function personalizeResponse(userId, baseResponse, guildId) {
   try {
     // Get relationship data
     const { data: relationship, error } = await supabase
       .from('bri_relationships')
       .select('*')
       .eq('user_id', userId)
+      .eq('guild_id', guildId)
       .single();
       
     if (error && error.code !== 'PGRST116') {
@@ -1164,6 +1497,7 @@ export async function personalizeResponse(userId, baseResponse) {
     return baseResponse;
   }
 }
+
 
 /**
  * Applies personalizations to a response
@@ -1236,9 +1570,10 @@ Important guidelines:
  * Returns Bri's personal content (interests, storylines) to include in a response
  * @param {string} userId - The user's ID
  * @param {Object|null} relevantContent - Optional content that was found relevant
+ * @param {string} guildId - The guild ID
  * @returns {Promise<string>} - Personal content to include
  */
-export async function getPersonalContent(userId, relevantContent = null) {
+export async function getPersonalContent(userId, relevantContent = null, guildId) {
   try {
     if (!relevantContent) {
       return '';
@@ -1248,7 +1583,7 @@ export async function getPersonalContent(userId, relevantContent = null) {
     
     if (type === 'interest') {
       // Format interest sharing based on relationship level
-      const relationshipLevel = await getRelationshipLevel(userId);
+      const relationshipLevel = await getRelationshipLevel(userId, guildId);
       
       if (relationshipLevel <= RELATIONSHIP_LEVELS.ACQUAINTANCE) {
         // Basic interest mention
@@ -1273,6 +1608,7 @@ export async function getPersonalContent(userId, relevantContent = null) {
     return '';
   }
 }
+
 
 /**
  * Gets a random fact from an array of facts

@@ -374,3 +374,97 @@ export async function extractIntuitedMemories(summaryText, userId) {
 // }
 
 
+/**
+ * Manually creates tables if RPC method fails
+ */
+async function manuallyCreateTables() {
+  // Create interests table
+  const { error: interestsError } = await supabase.query(`
+    CREATE TABLE IF NOT EXISTS bri_interests (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL,
+      level INTEGER NOT NULL DEFAULT 1,
+      description TEXT,
+      facts JSONB,
+      tags JSONB,
+      last_discussed TIMESTAMP WITH TIME ZONE,
+      share_threshold FLOAT DEFAULT 0.5,
+      embedding VECTOR(1536)
+    );
+  `);
+  
+  if (interestsError) {
+    logger.warn("Manual creation of interests table failed, but this is expected if using Supabase: ", interestsError);
+  }
+  
+  // Create storyline table
+  const { error: storylineError } = await supabase.query(`
+    CREATE TABLE IF NOT EXISTS bri_storyline (
+      id TEXT PRIMARY KEY,
+      title TEXT NOT NULL,
+      description TEXT,
+      status TEXT NOT NULL,
+      start_date TIMESTAMP WITH TIME ZONE,
+      end_date TIMESTAMP WITH TIME ZONE,
+      progress FLOAT DEFAULT 0,
+      updates JSONB,
+      share_threshold FLOAT DEFAULT 0.5,
+      embedding VECTOR(1536)
+    );
+  `);
+  
+  if (storylineError) {
+    logger.warn("Manual creation of storyline table failed, but this is expected if using Supabase: ", storylineError);
+  }
+  
+  // Create relationships table
+  const { error: relationshipsError } = await supabase.query(`
+    CREATE TABLE IF NOT EXISTS bri_relationships (
+      user_id TEXT PRIMARY KEY,
+      level INTEGER NOT NULL DEFAULT 0,
+      interaction_count INTEGER DEFAULT 0,
+      last_interaction TIMESTAMP WITH TIME ZONE,
+      shared_interests JSONB,
+      conversation_topics JSONB,
+      inside_jokes JSONB,
+      created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+      updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+    );
+  `);
+  
+  if (relationshipsError) {
+    logger.warn("Manual creation of relationships table failed, but this is expected if using Supabase: ", relationshipsError);
+  }
+}
+
+
+try {
+  // First migrate the journal channel settings
+  const migrationResult = await migrateJournalChannels();
+  logger.info("Journal settings migration result:", migrationResult);
+  
+  // If a global channel was found, complete its migration with the client
+  if (migrationResult.global_channel_id) {
+    const globalMigrationResult = await migrateGlobalJournalChannel(
+      client, // Pass the Discord client
+      migrationResult.global_channel_id // Pass the global channel ID from the first function
+    );
+    
+    logger.info("Global channel migration result:", globalMigrationResult);
+  }
+  
+  // Then initialize the journal system
+  await initializeJournalSystem(client);
+  logger.info("Journal system initialized");
+} catch (error) {
+  logger.error("Error during journal migration or initialization:", error);
+}
+
+// Test database access
+//const databaseOk = await testDatabaseAccess();
+//if (!databaseOk) {
+//  logger.warn("Database access issues detected. Time-related features may not work correctly.");
+//}
+
+// Run database tests
+//await testDatabaseInDepth();

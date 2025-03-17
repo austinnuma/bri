@@ -6,7 +6,9 @@ import { normalizeText } from './textUtils.js';
 
 // Reference to Discord client (set during initialization)
 let discordClientRef = null;
-let journalChannelId = null;
+
+// Store channel IDs by guild ID
+const journalChannels = new Map();
 
 // Constants for journal entry types
 export const JOURNAL_ENTRY_TYPES = {
@@ -18,20 +20,37 @@ export const JOURNAL_ENTRY_TYPES = {
 };
 
 // Queue for pending journal entries when channel isn't available
-const pendingEntries = [];
+// Store by guild ID
+const pendingEntries = new Map();
 
 /**
  * Initialize the journal system
  * @param {Object} client - Discord client
- * @param {string} channelId - Channel ID for journal entries
+ * @param {string} channelId - Channel ID for journal entries (optional)
+ * @param {string} guildId - Guild ID where the channel is located (optional)
  */
-export async function initializeJournalSystem(client, channelId) {
+export async function initializeJournalSystem(client, channelId, guildId) {
   try {
-    logger.info("Initializing Bri's journal system...");
+    // If a specific guild was provided, log it, otherwise indicate it's global initialization
+    if (guildId) {
+      logger.info(`Initializing Bri's journal system for guild ${guildId}...`);
+    } else {
+      logger.info(`Initializing Bri's journal system globally...`);
+    }
     
     // Store references
     discordClientRef = client;
-    journalChannelId = channelId;
+    
+    // Add this channel to our map if both channelId and guildId are provided
+    if (channelId && guildId) {
+      journalChannels.set(guildId, channelId);
+      logger.info(`Set journal channel for guild ${guildId} to ${channelId}`);
+    }
+    
+    // If no specific guild was provided, attempt to load all guild journal channels
+    if (!guildId) {
+      await loadAllJournalChannels();
+    }
     
     // Check if the journal_entries table exists
     const { error: journalCheckError } = await supabase
@@ -68,15 +87,95 @@ export async function initializeJournalSystem(client, channelId) {
       logger.info("Journal entries table already exists");
     }
     
-    // Process any pending entries that might exist
-    await processPendingEntries();
+    // Process any pending entries for this guild or all guilds if guildId is not provided
+    await processPendingEntries(guildId);
     
-    // Schedule random daily thoughts
-    scheduleRandomJournalEntries();
+    // If a specific guild ID was provided, schedule random entries for that guild
+    if (guildId) {
+      scheduleRandomJournalEntries(guildId);
+    } else {
+      // If no specific guild was provided, schedule for all known guilds
+      const allGuildIds = Array.from(journalChannels.keys());
+      for (const gId of allGuildIds) {
+        // Skip the "legacy" key as it's not a real guild ID
+        if (gId !== 'legacy') {
+          scheduleRandomJournalEntries(gId);
+        }
+      }
+    }
     
-    logger.info("Journal system initialization complete");
+    if (guildId) {
+      logger.info(`Journal system initialization complete for guild ${guildId}`);
+    } else {
+      logger.info("Journal system initialization complete for all guilds");
+    }
   } catch (error) {
-    logger.error("Error initializing journal system:", error);
+    if (guildId) {
+      logger.error(`Error initializing journal system for guild ${guildId}:`, error);
+    } else {
+      logger.error("Error initializing journal system globally:", error);
+    }
+  }
+}
+
+/**
+ * Load all journal channels from the database
+ */
+async function loadAllJournalChannels() {
+  try {
+    // First try to load from the dedicated table
+    const { data: channelData, error } = await supabase
+      .from('guild_journal_channels')
+      .select('guild_id, channel_id');
+      
+    if (!error && channelData && channelData.length > 0) {
+      // Load all channels from the dedicated table
+      channelData.forEach(row => {
+        journalChannels.set(row.guild_id, row.channel_id);
+      });
+      
+      logger.info(`Loaded ${channelData.length} journal channels from guild_journal_channels table`);
+      return;
+    }
+    
+    // Fall back to the legacy method if needed
+    if (error && error.code === '42P01') {
+      logger.info("guild_journal_channels table doesn't exist, falling back to bot_settings");
+      
+      // Get all settings with keys starting with 'journal_channel_id:'
+      const { data: settingsData, error: settingsError } = await supabase
+        .from('bot_settings')
+        .select('key, value')
+        .like('key', 'journal_channel_id:%');
+        
+      if (!settingsError && settingsData && settingsData.length > 0) {
+        // Process each setting
+        settingsData.forEach(setting => {
+          // Extract guild ID from the key
+          const guildId = setting.key.split(':')[1];
+          if (guildId) {
+            journalChannels.set(guildId, setting.value);
+          }
+        });
+        
+        logger.info(`Loaded ${journalChannels.size} journal channels from bot_settings`);
+      } else {
+        // Check for the legacy single channel setting
+        const { data: legacyData, error: legacyError } = await supabase
+          .from('bot_settings')
+          .select('value')
+          .eq('key', 'journal_channel_id')
+          .single();
+          
+        if (!legacyError && legacyData && legacyData.value) {
+          // Store with a special 'legacy' key
+          journalChannels.set('legacy', legacyData.value);
+          logger.info(`Loaded legacy journal channel: ${legacyData.value}`);
+        }
+      }
+    }
+  } catch (error) {
+    logger.error("Error loading journal channels:", error);
   }
 }
 
@@ -94,7 +193,8 @@ async function manuallyCreateJournalTable() {
         related_id TEXT,
         created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
         metadata JSONB,
-        embedding VECTOR(1536)
+        embedding VECTOR(1536),
+        guild_id TEXT
       );
     `);
     
@@ -111,9 +211,10 @@ async function manuallyCreateJournalTable() {
 /**
  * Creates a journal entry for a storyline update
  * @param {Object} storyline - Storyline object
+ * @param {string} guildId - Guild ID
  * @returns {Promise<Object|null>} - Created journal entry
  */
-export async function createStorylineJournalEntry(storyline) {
+export async function createStorylineJournalEntry(storyline, guildId) {
   try {
     const latestUpdate = getLatestUpdate(storyline);
     
@@ -126,7 +227,7 @@ export async function createStorylineJournalEntry(storyline) {
     const entry = await generateStorylineJournalEntry(storyline, latestUpdate);
     
     // Post to Discord
-    const message = await postJournalEntry(entry.title, entry.content);
+    const message = await postJournalEntry(entry.title, entry.content, guildId);
     
     // Store in database
     const storedEntry = await storeJournalEntry({
@@ -140,7 +241,8 @@ export async function createStorylineJournalEntry(storyline) {
         storyline_progress: storyline.progress,
         update_content: latestUpdate.content,
         update_date: latestUpdate.date
-      }
+      },
+      guild_id: guildId
     });
     
     return storedEntry;
@@ -154,15 +256,16 @@ export async function createStorylineJournalEntry(storyline) {
  * Creates a journal entry for a new or updated interest
  * @param {Object} interest - Interest object
  * @param {boolean} isNew - Whether this is a new interest
+ * @param {string} guildId - Guild ID
  * @returns {Promise<Object|null>} - Created journal entry
  */
-export async function createInterestJournalEntry(interest, isNew = false) {
+export async function createInterestJournalEntry(interest, isNew = false, guildId) {
   try {
     // Generate a journal-style entry using OpenAI
     const entry = await generateInterestJournalEntry(interest, isNew);
     
     // Post to Discord
-    const message = await postJournalEntry(entry.title, entry.content);
+    const message = await postJournalEntry(entry.title, entry.content, guildId);
     
     // Store in database
     const storedEntry = await storeJournalEntry({
@@ -175,7 +278,8 @@ export async function createInterestJournalEntry(interest, isNew = false) {
         interest_name: interest.name,
         interest_level: interest.level,
         is_new_interest: isNew
-      }
+      },
+      guild_id: guildId
     });
     
     return storedEntry;
@@ -187,9 +291,10 @@ export async function createInterestJournalEntry(interest, isNew = false) {
 
 /**
  * Creates a random daily journal entry
+ * @param {string} guildId - Guild ID
  * @returns {Promise<Object|null>} - Created journal entry
  */
-export async function createRandomJournalEntry() {
+export async function createRandomJournalEntry(guildId) {
   try {
     // Get existing interests to potentially reference
     const { data: interests, error: interestsError } = await supabase
@@ -220,7 +325,7 @@ export async function createRandomJournalEntry() {
     const entry = await generateRandomJournalEntry(interestNames, storylineTitles);
     
     // Post to Discord
-    const message = await postJournalEntry(entry.title, entry.content);
+    const message = await postJournalEntry(entry.title, entry.content, guildId);
     
     // Store in database
     const storedEntry = await storeJournalEntry({
@@ -232,7 +337,8 @@ export async function createRandomJournalEntry() {
         referenced_interests: entry.referencedInterests || [],
         referenced_storylines: entry.referencedStorylines || [],
         entry_mood: entry.mood
-      }
+      },
+      guild_id: guildId
     });
     
     return storedEntry;
@@ -243,17 +349,59 @@ export async function createRandomJournalEntry() {
 }
 
 /**
- * Posts a journal entry to the Discord channel
+ * Gets the channel ID for a specific guild
+ * @param {string} guildId - Guild ID
+ * @returns {string|null} - Channel ID or null
+ */
+function getJournalChannelForGuild(guildId) {
+  // If we have a specific channel for this guild, use it
+  if (journalChannels.has(guildId)) {
+    return journalChannels.get(guildId);
+  }
+  
+  // If we have a legacy channel, use it as fallback
+  if (journalChannels.has('legacy')) {
+    logger.debug(`No journal channel for guild ${guildId}, using legacy channel`);
+    return journalChannels.get('legacy');
+  }
+  
+  return null;
+}
+
+/**
+ * Posts a journal entry to the Discord channel for a specific guild
  * @param {string} title - Entry title
  * @param {string} content - Entry content
+ * @param {string} guildId - Guild ID
  * @returns {Promise<Object|null>} - Discord message object or null
  */
-async function postJournalEntry(title, content) {
+async function postJournalEntry(title, content, guildId) {
   try {
-    // Make sure we have client and channel references
-    if (!discordClientRef || !journalChannelId) {
-      logger.warn("Missing Discord client or channel ID. Queuing journal entry for later.");
-      pendingEntries.push({ title, content });
+    // Make sure we have client reference
+    if (!discordClientRef) {
+      logger.warn("Missing Discord client reference. Queuing journal entry for later.");
+      
+      // Initialize pending entries queue for this guild if needed
+      if (!pendingEntries.has(guildId)) {
+        pendingEntries.set(guildId, []);
+      }
+      
+      pendingEntries.get(guildId).push({ title, content, guildId });
+      return null;
+    }
+    
+    // Get the channel ID for this guild
+    const journalChannelId = getJournalChannelForGuild(guildId);
+    
+    if (!journalChannelId) {
+      logger.warn(`No journal channel configured for guild ${guildId}. Queuing entry for later.`);
+      
+      // Initialize pending entries queue for this guild if needed
+      if (!pendingEntries.has(guildId)) {
+        pendingEntries.set(guildId, []);
+      }
+      
+      pendingEntries.get(guildId).push({ title, content, guildId });
       return null;
     }
     
@@ -262,8 +410,14 @@ async function postJournalEntry(title, content) {
       const channel = await discordClientRef.channels.fetch(journalChannelId);
       
       if (!channel) {
-        logger.warn(`Journal channel ${journalChannelId} not found. Queuing entry for later.`);
-        pendingEntries.push({ title, content });
+        logger.warn(`Journal channel ${journalChannelId} for guild ${guildId} not found. Queuing entry for later.`);
+        
+        // Initialize pending entries queue for this guild if needed
+        if (!pendingEntries.has(guildId)) {
+          pendingEntries.set(guildId, []);
+        }
+        
+        pendingEntries.get(guildId).push({ title, content, guildId });
         return null;
       }
       
@@ -281,39 +435,80 @@ async function postJournalEntry(title, content) {
       const message = await channel.send(formattedMessage);
       return message;
     } catch (channelError) {
-      logger.error("Error accessing journal channel:", channelError);
-      pendingEntries.push({ title, content });
+      logger.error(`Error accessing journal channel for guild ${guildId}:`, channelError);
+      
+      // Initialize pending entries queue for this guild if needed
+      if (!pendingEntries.has(guildId)) {
+        pendingEntries.set(guildId, []);
+      }
+      
+      pendingEntries.get(guildId).push({ title, content, guildId });
       return null;
     }
   } catch (error) {
-    logger.error("Error posting journal entry:", error);
+    logger.error(`Error posting journal entry for guild ${guildId}:`, error);
     return null;
   }
 }
 
 /**
- * Process any pending journal entries
+ * Process any pending journal entries for a specific guild
+ * @param {string} guildId - Guild ID (optional - if not provided, process for all guilds)
  */
-async function processPendingEntries() {
-  if (pendingEntries.length === 0) {
+async function processPendingEntries(guildId = null) {
+  // If a specific guild was provided, only process entries for that guild
+  if (guildId) {
+    const entries = pendingEntries.get(guildId) || [];
+    if (entries.length === 0) {
+      return;
+    }
+    
+    logger.info(`Processing ${entries.length} pending journal entries for guild ${guildId}`);
+    
+    // Make a copy of the queue and clear it
+    const entriesToProcess = [...entries];
+    pendingEntries.set(guildId, []);
+    
+    for (const entry of entriesToProcess) {
+      try {
+        await postJournalEntry(entry.title, entry.content, guildId);
+        // Add a small delay between posts
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      } catch (error) {
+        logger.error(`Error processing pending journal entry for guild ${guildId}:`, error);
+        // Add back to queue if failed
+        const currentEntries = pendingEntries.get(guildId) || [];
+        currentEntries.push(entry);
+        pendingEntries.set(guildId, currentEntries);
+      }
+    }
     return;
   }
   
-  logger.info(`Processing ${pendingEntries.length} pending journal entries`);
-  
-  // Make a copy of the queue and clear it
-  const entriesToProcess = [...pendingEntries];
-  pendingEntries.length = 0;
-  
-  for (const entry of entriesToProcess) {
-    try {
-      await postJournalEntry(entry.title, entry.content);
-      // Add a small delay between posts
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    } catch (error) {
-      logger.error("Error processing pending journal entry:", error);
-      // Add back to queue if failed
-      pendingEntries.push(entry);
+  // Process for all guilds
+  for (const [guildId, entries] of pendingEntries.entries()) {
+    if (entries.length === 0) {
+      continue;
+    }
+    
+    logger.info(`Processing ${entries.length} pending journal entries for guild ${guildId}`);
+    
+    // Make a copy of the queue and clear it
+    const entriesToProcess = [...entries];
+    pendingEntries.set(guildId, []);
+    
+    for (const entry of entriesToProcess) {
+      try {
+        await postJournalEntry(entry.title, entry.content, guildId);
+        // Add a small delay between posts
+        await new Promise(resolve => setTimeout(resolve, 1000));
+      } catch (error) {
+        logger.error(`Error processing pending journal entry for guild ${guildId}:`, error);
+        // Add back to queue if failed
+        const currentEntries = pendingEntries.get(guildId) || [];
+        currentEntries.push(entry);
+        pendingEntries.set(guildId, currentEntries);
+      }
     }
   }
 }
@@ -338,7 +533,8 @@ async function storeJournalEntry(entry) {
         content: entry.content,
         related_id: entry.related_id,
         metadata: entry.metadata,
-        embedding: embedding
+        embedding: embedding,
+        guild_id: entry.guild_id
       })
       .select()
       .single();
@@ -582,9 +778,10 @@ Format your response as JSON:
  * Gets recent journal entries
  * @param {number} limit - Maximum number of entries to return
  * @param {string} entryType - Filter by entry type (optional)
+ * @param {string} guildId - Guild ID (optional)
  * @returns {Promise<Array>} - Array of journal entries
  */
-export async function getRecentJournalEntries(limit = 10, entryType = null) {
+export async function getRecentJournalEntries(limit = 10, entryType = null, guildId = null) {
   try {
     let query = supabase
       .from('bri_journal_entries')
@@ -594,6 +791,10 @@ export async function getRecentJournalEntries(limit = 10, entryType = null) {
       
     if (entryType) {
       query = query.eq('entry_type', entryType);
+    }
+    
+    if (guildId) {
+      query = query.eq('guild_id', guildId);
     }
     
     const { data, error } = await query;
@@ -614,16 +815,23 @@ export async function getRecentJournalEntries(limit = 10, entryType = null) {
  * Gets journal entries related to a specific entity (storyline or interest)
  * @param {string} relatedId - Related entity ID
  * @param {number} limit - Maximum number of entries to return
+ * @param {string} guildId - Guild ID (optional)
  * @returns {Promise<Array>} - Array of journal entries
  */
-export async function getRelatedJournalEntries(relatedId, limit = 5) {
+export async function getRelatedJournalEntries(relatedId, limit = 5, guildId = null) {
   try {
-    const { data, error } = await supabase
+    let query = supabase
       .from('bri_journal_entries')
       .select('*')
       .eq('related_id', relatedId)
       .order('created_at', { ascending: false })
       .limit(limit);
+      
+    if (guildId) {
+      query = query.eq('guild_id', guildId);
+    }
+    
+    const { data, error } = await query;
       
     if (error) {
       logger.error(`Error fetching journal entries for related ID ${relatedId}:`, error);
@@ -641,12 +849,37 @@ export async function getRelatedJournalEntries(relatedId, limit = 5) {
  * Performs a semantic search across journal entries
  * @param {string} searchText - Text to search for
  * @param {number} limit - Maximum number of results
+ * @param {string} guildId - Guild ID (optional)
  * @returns {Promise<Array>} - Matching journal entries
  */
-export async function searchJournalEntries(searchText, limit = 5) {
+export async function searchJournalEntries(searchText, limit = 5, guildId = null) {
   try {
     const embedding = await getEmbedding(searchText);
     
+    // If guild ID is provided, use a query parameter version
+    if (guildId) {
+      const { data, error } = await supabase.rpc('match_journal_entries_by_guild', {
+        query_embedding: embedding,
+        match_threshold: 0.7,
+        match_count: limit,
+        p_guild_id: guildId
+      });
+      
+      if (error) {
+        // If the RPC function doesn't exist, fall back to the non-guild specific version
+        if (error.code === '42883') { // Function does not exist
+          logger.warn("match_journal_entries_by_guild function not found, falling back to standard search");
+          return await searchJournalEntries(searchText, limit);
+        }
+        
+        logger.error("Error in journal entry vector search by guild:", error);
+        return [];
+      }
+      
+      return data || [];
+    }
+    
+    // Standard search without guild filtering
     const { data, error } = await supabase.rpc('match_journal_entries', {
       query_embedding: embedding,
       match_threshold: 0.7,
@@ -666,34 +899,98 @@ export async function searchJournalEntries(searchText, limit = 5) {
 }
 
 /**
- * Schedules random journal entries to be created periodically
+ * Returns SQL for creating the RPC function to search journal entries by guild
+ * @returns {string} SQL query
  */
-function scheduleRandomJournalEntries() {
+export function getJournalSearchByGuildSQL() {
+  return `
+  CREATE OR REPLACE FUNCTION match_journal_entries_by_guild(
+    query_embedding vector(1536),
+    match_threshold float,
+    match_count int,
+    p_guild_id text
+  )
+  RETURNS TABLE (
+    id bigint,
+    entry_type text,
+    title text,
+    content text,
+    related_id text,
+    created_at timestamptz,
+    metadata jsonb,
+    guild_id text,
+    similarity float
+  )
+  LANGUAGE plpgsql
+  AS $$
+  BEGIN
+    RETURN QUERY
+    SELECT
+      bri_journal_entries.id,
+      bri_journal_entries.entry_type,
+      bri_journal_entries.title,
+      bri_journal_entries.content,
+      bri_journal_entries.related_id,
+      bri_journal_entries.created_at,
+      bri_journal_entries.metadata,
+      bri_journal_entries.guild_id,
+      1 - (bri_journal_entries.embedding <=> query_embedding) as similarity
+    FROM
+      bri_journal_entries
+    WHERE
+      bri_journal_entries.guild_id = p_guild_id
+      AND 1 - (bri_journal_entries.embedding <=> query_embedding) > match_threshold
+    ORDER BY
+      bri_journal_entries.embedding <=> query_embedding
+    LIMIT match_count;
+  END;
+  $$;
+  `;
+}
+
+/**
+ * Schedules random journal entries to be created periodically for a specific guild
+ * @param {string} guildId - Guild ID
+ */
+function scheduleRandomJournalEntries(guildId) {
+  // Make sure we have a valid guild ID
+  if (!guildId || guildId === 'legacy') {
+    logger.warn("Cannot schedule journal entries without a valid guild ID");
+    return;
+  }
+
   // Create 1-2 random entries per day at random times
   
   // First entry: random time between 9 AM and 12 PM
   const morningHour = Math.floor(Math.random() * 3) + 9; // 9-11 AM
   const morningMinute = Math.floor(Math.random() * 60); // 0-59 minutes
   
-  scheduleEntryAt(morningHour, morningMinute);
+  scheduleEntryAt(morningHour, morningMinute, guildId);
   
   // Second entry (70% chance): random time between 3 PM and 8 PM
   if (Math.random() < 0.7) {
     const eveningHour = Math.floor(Math.random() * 5) + 15; // 3-7 PM (15-19 in 24h)
     const eveningMinute = Math.floor(Math.random() * 60); // 0-59 minutes
     
-    scheduleEntryAt(eveningHour, eveningMinute);
+    scheduleEntryAt(eveningHour, eveningMinute, guildId);
   }
   
-  logger.info("Scheduled random journal entries");
+  logger.info(`Scheduled random journal entries for guild ${guildId}`);
 }
 
 /**
- * Schedules a journal entry to be created at a specific time
+ * Schedules a journal entry to be created at a specific time for a specific guild
  * @param {number} hour - Hour (0-23)
  * @param {number} minute - Minute (0-59)
+ * @param {string} guildId - Guild ID
  */
-function scheduleEntryAt(hour, minute) {
+function scheduleEntryAt(hour, minute, guildId) {
+  // Validate guild ID
+  if (!guildId || guildId === 'legacy') {
+    logger.warn("Cannot schedule journal entry without a valid guild ID");
+    return;
+  }
+
   // Calculate milliseconds until the scheduled time
   const now = new Date();
   const scheduledTime = new Date(
@@ -714,18 +1011,18 @@ function scheduleEntryAt(hour, minute) {
   // Schedule the entry creation
   setTimeout(async () => {
     try {
-      await createRandomJournalEntry();
+      await createRandomJournalEntry(guildId);
       
       // Reschedule for the next day
-      scheduleEntryAt(hour, minute);
+      scheduleEntryAt(hour, minute, guildId);
     } catch (error) {
-      logger.error("Error creating scheduled journal entry:", error);
+      logger.error(`Error creating scheduled journal entry for guild ${guildId}:`, error);
       // Retry in 30 minutes
-      setTimeout(() => scheduleEntryAt(hour, minute), 30 * 60 * 1000);
+      setTimeout(() => scheduleEntryAt(hour, minute, guildId), 30 * 60 * 1000);
     }
   }, delay);
   
-  logger.info(`Scheduled journal entry for ${scheduledTime.toLocaleTimeString()} (in ${Math.round(delay/60000)} minutes)`);
+  logger.info(`Scheduled journal entry for guild ${guildId} at ${scheduledTime.toLocaleTimeString()} (in ${Math.round(delay/60000)} minutes)`);
 }
 
 // Export the journal entry types and main functions

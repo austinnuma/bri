@@ -15,6 +15,7 @@ import { initializeCharacterDevelopment, advanceStorylinesPeriodicTask } from '.
 import { scheduleMemoryMaintenance, runMemoryMaintenance } from './utils/memoryMaintenance.js';
 import { initializeTimeSystem, startTimeEventProcessing } from './utils/timeSystem.js';
 import { initializeJournalSystem, createRandomJournalEntry } from './utils/journalSystem.js';
+import { migrateGlobalJournalChannel, migrateJournalChannels } from './utils/migrateJournalChannels.js';
 
 
 // Initialize Discord client with the required intents
@@ -304,15 +305,6 @@ async function testDatabaseAccess() {
 // When the client is ready, run this code (only once)
 client.once('ready', async () => {
   logger.info(`Logged in as ${client.user.tag}!`);
-
-  // Test database access
-  //const databaseOk = await testDatabaseAccess();
-  //if (!databaseOk) {
-  //  logger.warn("Database access issues detected. Time-related features may not work correctly.");
-  //}
-
-  // Run database tests
-  //await testDatabaseInDepth();
   
   // Register slash commands
   const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
@@ -321,40 +313,78 @@ client.once('ready', async () => {
   const clientId = process.env.CLIENT_ID || client.user.id;
   
 
-  // Initialize journal system if channel ID exists
-  try {
-    const { data: settings, error } = await supabase
+// Initialize journal system by loading all configured channels
+try {
+  await initializeJournalSystem(client);
+  logger.info("Journal system initialized with all available channels");
+  
+  // Check for any channels that are configured but no longer accessible
+  const { data: settings, error } = await supabase
+    .from('guild_journal_channels')
+    .select('guild_id, channel_id');
+    
+  if (!error && settings && settings.length > 0) {
+    for (const setting of settings) {
+      try {
+        const channel = await client.channels.fetch(setting.channel_id);
+        if (channel) {
+          // Post a startup message to each valid channel
+          await channel.send("*Bri's journal system is now active. She'll post updates about her interests and activities here!*");
+          logger.info(`Connected to journal channel in guild ${setting.guild_id}: ${channel.name} (${setting.channel_id})`);
+        }
+      } catch (channelError) {
+        logger.warn(`Could not access journal channel ${setting.channel_id} in guild ${setting.guild_id}:`, channelError);
+      }
+    }
+  } else if (error && error.code === '42P01') {
+    // Table doesn't exist, check legacy settings
+    logger.info("No guild_journal_channels table found, checking legacy settings");
+    
+    const { data: legacySettings, error: legacyError } = await supabase
+      .from('bot_settings')
+      .select('key, value')
+      .like('key', 'journal_channel_id:%');
+      
+    if (!legacyError && legacySettings && legacySettings.length > 0) {
+      for (const setting of legacySettings) {
+        const guildId = setting.key.split(':')[1];
+        try {
+          const channel = await client.channels.fetch(setting.value);
+          if (channel) {
+            // Post a startup message to each valid legacy channel
+            await channel.send("*Bri's journal system is now active. She'll post updates about her interests and activities here!*");
+            logger.info(`Connected to legacy journal channel in guild ${guildId}: ${channel.name} (${setting.value})`);
+          }
+        } catch (channelError) {
+          logger.warn(`Could not access legacy journal channel ${setting.value} in guild ${guildId}:`, channelError);
+        }
+      }
+    }
+    
+    // Also check for the single global channel
+    const { data: globalSetting, error: globalError } = await supabase
       .from('bot_settings')
       .select('value')
       .eq('key', 'journal_channel_id')
       .single();
       
-    if (!error && settings?.value) {
-      const journalChannelId = settings.value;
-      
-      // Try to fetch the channel to verify it exists
+    if (!globalError && globalSetting && globalSetting.value) {
       try {
-        const channel = await client.channels.fetch(journalChannelId);
-        
+        const channel = await client.channels.fetch(globalSetting.value);
         if (channel) {
-          await initializeJournalSystem(client, journalChannelId);
-          logger.info(`Journal system initialized with channel: ${channel.name} (${journalChannelId})`);
-          
-          // Post a startup message
+          // Post a startup message to the global channel
           await channel.send("*Bri's journal system is now active. She'll post updates about her interests and activities here!*");
-        } else {
-          logger.warn(`Journal channel with ID ${journalChannelId} not found. Use /setup-journal to configure.`);
+          logger.info(`Connected to global journal channel: ${channel.name} (${globalSetting.value})`);
         }
       } catch (channelError) {
-        logger.warn(`Could not access journal channel with ID ${journalChannelId}:`, channelError);
-        logger.info("Use /setup-journal command to configure the journal channel");
+        logger.warn(`Could not access global journal channel ${globalSetting.value}:`, channelError);
       }
-    } else {
-      logger.info("No journal channel configured. Use /setup-journal command to set it up.");
     }
-  } catch (journalError) {
-    logger.error("Error initializing journal system:", journalError);
   }
+} catch (journalError) {
+  logger.error("Error initializing journal system:", journalError);
+  logger.info("Use /setup-journal command to configure journal channels for each server");
+}
 
 
   if (!clientId) {
