@@ -4,6 +4,10 @@ import { fetchGeminiResponse } from '../services/combinedServices.js';
 import { logger } from '../utils/logger.js';
 import { splitMessage } from '../utils/textUtils.js';
 
+// Import credit management functions
+import { hasEnoughCredits, useCredits, CREDIT_COSTS, getServerCredits } from '../utils/creditManager.js';
+import { getServerConfig } from '../utils/serverConfigManager.js';
+
 export const data = new SlashCommandBuilder()
   .setName('gemini')
   .setDescription('Ask Google Gemini AI a question with internet search')
@@ -30,6 +34,54 @@ export async function execute(interaction) {
       return;
     }
     
+    // Get guild ID for credit checks
+    const guildId = interaction.guildId;
+    
+    // Check if this server has credits enabled
+    const serverConfig = await getServerConfig(guildId);
+    const creditsEnabled = serverConfig?.credits_enabled === true;
+    
+    // If credits are enabled, check if there are enough credits
+    if (creditsEnabled) {
+      const operationType = 'GEMINI_QUERY';
+      
+      // Check if server has enough credits
+      const hasCredits = await hasEnoughCredits(guildId, operationType);
+      
+      if (!hasCredits) {
+        // Get current credit information for a more helpful message
+        const credits = await getServerCredits(guildId);
+        
+        const creditsEmbed = new EmbedBuilder()
+          .setTitle('Insufficient Credits')
+          .setDescription(`This server doesn't have enough credits to use the Gemini AI.`)
+          .setColor(0xFF0000)
+          .addFields(
+            {
+              name: '💰 Available Credits',
+              value: `${credits?.remaining_credits || 0} credits`,
+              inline: true
+            },
+            {
+              name: '💸 Required Credits',
+              value: `${CREDIT_COSTS[operationType]} credits`,
+              inline: true
+            },
+            {
+              name: '📊 Credit Cost',
+              value: `Using Gemini AI costs ${CREDIT_COSTS[operationType]} credits per query.`,
+              inline: true
+            }
+          )
+          .setFooter({ 
+            text: 'Purchase more credits on the Bri website or wait for your monthly refresh.'
+          });
+          
+        await interaction.editReply({ embeds: [creditsEmbed] });
+        return;
+      }
+    }
+    
     logger.info(`User ${interaction.user.id} asked Gemini: ${prompt}`);
     
     // Send typing indicator while processing
@@ -41,6 +93,12 @@ export async function execute(interaction) {
     if (!response || !response.text) {
       await interaction.editReply("Sorry, I couldn't get a response from Gemini right now. Try again later!");
       return;
+    }
+    
+    // If credits are enabled, use credits AFTER successful response
+    if (creditsEnabled) {
+      await useCredits(guildId, 'GEMINI_QUERY');
+      logger.info(`Used ${CREDIT_COSTS['GEMINI_QUERY']} credits for Gemini query in server ${guildId}`);
     }
     
     // Format response text

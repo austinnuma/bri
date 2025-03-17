@@ -1,6 +1,4 @@
 // Complete multi-server messageHandler.js
-// (This is the full implementation - replace your current file with this)
-
 import { 
   getEffectiveSystemPrompt, 
   getCombinedSystemPromptWithMemories, 
@@ -39,6 +37,13 @@ import { extractTimeAndEvent, createEvent, EVENT_TYPES, REMINDER_TIMES, getUserT
 import { getEmbedding } from './improvedEmbeddings.js';
 import natural from 'natural';
 import { getServerConfig, getServerPrefix, isFeatureEnabled } from './serverConfigManager.js';
+import { 
+  hasEnoughCredits, 
+  useCredits, 
+  CREDIT_COSTS, 
+  getServerCredits 
+} from './creditManager.js';
+
 
 // No longer using in-memory Maps, using database functions instead
 // const { userConversations, userContextLengths, userDynamicPrompts } = memoryManagerState;
@@ -60,6 +65,54 @@ function normalizeForComparison(text) {
     .replace(/\s{2,}/g, " ")
     .trim();
 }
+
+
+/**
+ * Checks if a server has sufficient credits for a chat operation
+ * @param {string} guildId - The Discord guild ID
+ * @returns {Promise<{hasCredits: boolean, credits: Object|null, insufficientMessage: string|null}>}
+ */
+async function checkServerCreditsForChat(guildId) {
+  try {
+    // Check if this server has credits enabled
+    const serverConfig = await getServerConfig(guildId);
+    const creditsEnabled = serverConfig?.credits_enabled === true;
+    
+    // If credits are not enabled, always return true
+    if (!creditsEnabled) {
+      return { hasCredits: true, credits: null, insufficientMessage: null };
+    }
+    
+    const operationType = 'CHAT_MESSAGE';
+    
+    // Check if server has enough credits
+    const hasCredits = await hasEnoughCredits(guildId, operationType);
+    
+    if (!hasCredits) {
+      // Get current credit information for a more helpful message
+      const credits = await getServerCredits(guildId);
+      
+      // Create a user-friendly message
+      const insufficientMessage = 
+        "⚠️ **Not enough credits!** This server has run out of credits to use Bri. " +
+        `Currently available: ${credits?.remaining_credits || 0} credits. ` +
+        "Server administrators can purchase more credits on the Bri website or wait for your monthly refresh.";
+      
+      return { 
+        hasCredits: false, 
+        credits, 
+        insufficientMessage 
+      };
+    }
+    
+    return { hasCredits: true, credits: null, insufficientMessage: null };
+  } catch (error) {
+    logger.error(`Error checking credits for chat in ${guildId}:`, error);
+    // If there's an error, let the message through
+    return { hasCredits: true, credits: null, insufficientMessage: null };
+  }
+}
+
 
 /**
  * Checks if a memory text is similar to any existing memory for a user
@@ -314,6 +367,14 @@ export async function handleLegacyMessage(message) {
     });
   }
 
+  // Check if the server has enough credits for a chat message
+  const creditCheck = await checkServerCreditsForChat(guildId);
+  if (!creditCheck.hasCredits) {
+    // Send a message about insufficient credits
+    await message.reply(creditCheck.insufficientMessage);
+    return; // Stop processing
+  }
+
   // Handle regular text messages
   const effectiveSystemPrompt = getEffectiveSystemPrompt(message.author.id, guildId);
   const combinedSystemPrompt = await getCombinedSystemPromptWithMemories(
@@ -441,6 +502,13 @@ export async function handleLegacyMessage(message) {
         userMessageCounters.set(userGuildCounterKey, 0);
         lastSummaryTimestamps.set(userGuildCounterKey, now);
       }
+    }
+
+    // If the response was successful, use credits for this chat message
+    const serverConfig = await getServerConfig(guildId);
+    if (serverConfig?.credits_enabled) {
+      await useCredits(guildId, 'CHAT_MESSAGE');
+      logger.debug(`Used ${CREDIT_COSTS['CHAT_MESSAGE']} credits for chat message in server ${guildId}`);
     }
 
     // Split and send the reply if needed

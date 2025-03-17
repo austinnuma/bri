@@ -180,48 +180,60 @@ export async function hasEnoughCredits(guildId, operationType) {
  * @returns {Promise<boolean>} - Whether the credits were successfully used
  */
 export async function useCredits(guildId, operationType) {
-  try {
-    // Check if credits are enabled in server config
-    const serverConfig = await getServerConfig(guildId);
-    if (!serverConfig.credits_enabled) {
-      return true; // Credits not enabled, so always return true
-    }
-    
-    const creditCost = CREDIT_COSTS[operationType] || 1;
-    
-    // Check if server has enough credits
-    const hasCredits = await hasEnoughCredits(guildId, operationType);
-    if (!hasCredits) {
-      logger.warn(`Server ${guildId} attempted ${operationType} but has insufficient credits`);
+    try {
+      // Check if credits are enabled in server config
+      const serverConfig = await getServerConfig(guildId);
+      if (!serverConfig.credits_enabled) {
+        return true; // Credits not enabled, so always return true
+      }
+      
+      const creditCost = CREDIT_COSTS[operationType] || 1;
+      
+      // Check if server has enough credits
+      const hasCredits = await hasEnoughCredits(guildId, operationType);
+      if (!hasCredits) {
+        logger.warn(`Server ${guildId} attempted ${operationType} but has insufficient credits`);
+        return false;
+      }
+      
+      // First, get the current credit values
+      const { data, error: fetchError } = await supabase
+        .from('server_credits')
+        .select('remaining_credits, total_used_credits')
+        .eq('guild_id', guildId)
+        .single();
+      
+      if (fetchError) {
+        logger.error(`Error fetching credits for update in ${guildId}:`, fetchError);
+        return false;
+      }
+      
+      // Then update with calculated values
+      const { error } = await supabase
+        .from('server_credits')
+        .update({
+          remaining_credits: data.remaining_credits - creditCost,
+          total_used_credits: data.total_used_credits + creditCost,
+          updated_at: new Date().toISOString()
+        })
+        .eq('guild_id', guildId);
+      
+      if (error) {
+        logger.error(`Error using credits for ${guildId}:`, error);
+        return false;
+      }
+      
+      // Log the transaction
+      await logCreditTransaction(guildId, -creditCost, 'usage', operationType);
+      
+      // Check if credits are now low and send warning if needed
+      await checkLowCredits(guildId);
+      
+      return true;
+    } catch (error) {
+      logger.error(`Error in useCredits for ${guildId}:`, error);
       return false;
     }
-    
-    // Update credits in database
-    const { error } = await supabase
-      .from('server_credits')
-      .update({
-        remaining_credits: supabase.raw(`remaining_credits - ${creditCost}`),
-        total_used_credits: supabase.raw(`total_used_credits + ${creditCost}`),
-        updated_at: new Date().toISOString()
-      })
-      .eq('guild_id', guildId);
-    
-    if (error) {
-      logger.error(`Error using credits for ${guildId}:`, error);
-      return false;
-    }
-    
-    // Log the transaction
-    await logCreditTransaction(guildId, -creditCost, 'usage', operationType);
-    
-    // Check if credits are now low and send warning if needed
-    await checkLowCredits(guildId);
-    
-    return true;
-  } catch (error) {
-    logger.error(`Error in useCredits for ${guildId}:`, error);
-    return false;
-  }
 }
 
 /**
@@ -233,38 +245,57 @@ export async function useCredits(guildId, operationType) {
  * @returns {Promise<boolean>} - Whether the credits were successfully added
  */
 export async function addCredits(guildId, amount, source, paymentId = null) {
-  try {
-    // Make sure server exists in credit system
-    let credits = await getServerCredits(guildId);
-    if (!credits) {
-      credits = await initializeServerCredits(guildId);
-      if (!credits) return false;
-    }
-    
-    // Update credits in database
-    const { error } = await supabase
-      .from('server_credits')
-      .update({
-        remaining_credits: supabase.raw(`remaining_credits + ${amount}`),
-        credits_purchased: source === 'purchase' ? supabase.raw(`credits_purchased + ${amount}`) : supabase.raw('credits_purchased'),
+    try {
+      // Make sure server exists in credit system
+      let credits = await getServerCredits(guildId);
+      if (!credits) {
+        credits = await initializeServerCredits(guildId);
+        if (!credits) return false;
+      }
+      
+      // First, get current values
+      const { data, error: fetchError } = await supabase
+        .from('server_credits')
+        .select('remaining_credits, credits_purchased')
+        .eq('guild_id', guildId)
+        .single();
+      
+      if (fetchError) {
+        logger.error(`Error fetching credits for update in ${guildId}:`, fetchError);
+        return false;
+      }
+      
+      // Update with calculated values
+      const updatedCredits = {
+        remaining_credits: data.remaining_credits + amount,
         updated_at: new Date().toISOString()
-      })
-      .eq('guild_id', guildId);
-    
-    if (error) {
-      logger.error(`Error adding credits to ${guildId}:`, error);
+      };
+      
+      // Only update purchased credits if this is a purchase
+      if (source === 'purchase') {
+        updatedCredits.credits_purchased = data.credits_purchased + amount;
+      }
+      
+      // Update credits in database
+      const { error } = await supabase
+        .from('server_credits')
+        .update(updatedCredits)
+        .eq('guild_id', guildId);
+      
+      if (error) {
+        logger.error(`Error adding credits to ${guildId}:`, error);
+        return false;
+      }
+      
+      // Log the transaction
+      await logCreditTransaction(guildId, amount, source, null, paymentId);
+      
+      logger.info(`Added ${amount} credits to server ${guildId} from ${source}`);
+      return true;
+    } catch (error) {
+      logger.error(`Error in addCredits for ${guildId}:`, error);
       return false;
     }
-    
-    // Log the transaction
-    await logCreditTransaction(guildId, amount, source, null, paymentId);
-    
-    logger.info(`Added ${amount} credits to server ${guildId} from ${source}`);
-    return true;
-  } catch (error) {
-    logger.error(`Error in addCredits for ${guildId}:`, error);
-    return false;
-  }
 }
 
 /**

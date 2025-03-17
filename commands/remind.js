@@ -1,7 +1,11 @@
 // commands/remind.js
-import { SlashCommandBuilder } from 'discord.js';
+import { SlashCommandBuilder, EmbedBuilder } from 'discord.js';
 import { logger } from '../utils/logger.js';
 import { createEvent, getUserTimezone, parseTimeSpecification, EVENT_TYPES, REMINDER_TIMES } from '../utils/timeSystem.js';
+
+// Import credit management functions
+import { hasEnoughCredits, useCredits, CREDIT_COSTS, getServerCredits } from '../utils/creditManager.js';
+import { getServerConfig } from '../utils/serverConfigManager.js';
 
 export const data = new SlashCommandBuilder()
     .setName('remind')
@@ -36,6 +40,53 @@ export async function execute(interaction) {
         const what = interaction.options.getString('what');
         const when = interaction.options.getString('when');
         const reminderTime = interaction.options.getString('reminder_time') || 'exact';
+        
+        // Get guild ID for credit checks
+        const guildId = interaction.guildId;
+        
+        // Check if this server has credits enabled
+        const serverConfig = await getServerConfig(guildId);
+        const creditsEnabled = serverConfig?.credits_enabled === true;
+        
+        // If credits are enabled, check if there are enough credits
+        if (creditsEnabled) {
+            const operationType = 'REMINDER_CREATION';
+            
+            // Check if server has enough credits
+            const hasCredits = await hasEnoughCredits(guildId, operationType);
+            
+            if (!hasCredits) {
+                // Get current credit information for a more helpful message
+                const credits = await getServerCredits(guildId);
+                
+                const creditsEmbed = new EmbedBuilder()
+                    .setTitle('Insufficient Credits')
+                    .setDescription(`This server doesn't have enough credits to create a reminder.`)
+                    .setColor(0xFF0000)
+                    .addFields(
+                        {
+                            name: '💰 Available Credits',
+                            value: `${credits?.remaining_credits || 0} credits`,
+                            inline: true
+                        },
+                        {
+                            name: '💸 Required Credits',
+                            value: `${CREDIT_COSTS[operationType]} credits`,
+                            inline: true
+                        },
+                        {
+                            name: '📊 Credit Cost',
+                            value: `Creating a reminder costs ${CREDIT_COSTS[operationType]} credits.`,
+                            inline: true
+                        }
+                    )
+                    .setFooter({ 
+                        text: 'Purchase more credits on the Bri website or wait for your monthly refresh.'
+                    });
+                    
+                return interaction.editReply({ embeds: [creditsEmbed] });
+            }
+        }
         
         // Get the user's timezone
         const timezone = await getUserTimezone(interaction.user.id);
@@ -84,6 +135,12 @@ export async function execute(interaction) {
         
         if (!event) {
             return interaction.editReply("Sorry, I couldn't create that reminder. Please try again.");
+        }
+        
+        // If credits are enabled, use credits AFTER successful reminder creation
+        if (creditsEnabled) {
+            await useCredits(guildId, 'REMINDER_CREATION');
+            logger.info(`Used ${CREDIT_COSTS['REMINDER_CREATION']} credits for reminder creation in server ${guildId}`);
         }
         
         // Format the reminder time in the user's timezone

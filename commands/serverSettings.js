@@ -38,7 +38,6 @@ export const data = new SlashCommandBuilder()
             { name: 'Memory', value: 'memory' },
             { name: 'Reminders', value: 'reminders' },
             { name: 'Character Development', value: 'character' },
-            { name: 'Credit System', value: 'credits' }
           ))
       .addBooleanOption(option =>
         option.setName('enabled')
@@ -102,12 +101,6 @@ export async function execute(interaction) {
         
         // Update the specific feature
         enabledFeatures[feature] = enabled;
-        
-        // Special handling for credit system
-        if (feature === 'credits') {
-          await updateServerConfig(guildId, { credits_enabled: enabled });
-          return interaction.editReply(`Credit system is now ${enabled ? 'enabled' : 'disabled'}`);
-        }
         
         // Save the updated features
         await updateServerConfig(guildId, { enabled_features: enabledFeatures });
