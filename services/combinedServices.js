@@ -1,5 +1,6 @@
 // Global Imports
 import { logger } from '../utils/logger.js';
+import { generateImageFromPrompt } from './imagenService.js';
 
 /**
  * ---------------------------------------------------------------
@@ -143,6 +144,9 @@ export async function queryGemini(prompt) {
 
 // Export models for direct access if needed
 export { searchEnabledModel, regularModel };
+
+
+export { generateImageFromPrompt };
 
 
 

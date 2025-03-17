@@ -329,7 +329,7 @@ try {
         const channel = await client.channels.fetch(setting.channel_id);
         if (channel) {
           // Post a startup message to each valid channel
-          await channel.send("*Bri's journal system is now active. She'll post updates about her interests and activities here!*");
+          //await channel.send("*Bri's journal system is now active. She'll post updates about her interests and activities here!*");
           logger.info(`Connected to journal channel in guild ${setting.guild_id}: ${channel.name} (${setting.channel_id})`);
         }
       } catch (channelError) {
@@ -352,7 +352,7 @@ try {
           const channel = await client.channels.fetch(setting.value);
           if (channel) {
             // Post a startup message to each valid legacy channel
-            await channel.send("*Bri's journal system is now active. She'll post updates about her interests and activities here!*");
+            //await channel.send("*Bri's journal system is now active. She'll post updates about her interests and activities here!*");
             logger.info(`Connected to legacy journal channel in guild ${guildId}: ${channel.name} (${setting.value})`);
           }
         } catch (channelError) {
@@ -373,7 +373,7 @@ try {
         const channel = await client.channels.fetch(globalSetting.value);
         if (channel) {
           // Post a startup message to the global channel
-          await channel.send("*Bri's journal system is now active. She'll post updates about her interests and activities here!*");
+          //await channel.send("*Bri's journal system is now active. She'll post updates about her interests and activities here!*");
           logger.info(`Connected to global journal channel: ${channel.name} (${globalSetting.value})`);
         }
       } catch (channelError) {

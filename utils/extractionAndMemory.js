@@ -11,12 +11,33 @@ import { enhancedSummarizeConversation } from './summarization.js';
  * Post-processes extracted facts to remove invalid or low-quality memories
  * while preserving legitimate negative preferences
  * @param {Array<string>} facts - The extracted facts
+ * @param {string} botName - The name of the bot (e.g., "Bri")
  * @returns {Array<string>} - Filtered and improved facts
  */
 function postProcessExtractedFacts(facts) {
+  // Convert bot name to lowercase for case-insensitive comparison
+  const botNameLower = botName.toLowerCase();
   // Filter out problematic patterns
   const filteredFacts = facts.filter(fact => {
-    const lowercaseFact = fact.toLowerCase();
+  const lowercaseFact = fact.toLowerCase();
+
+  // Filter out potential bot name misidentification
+  // Only keep "User's name is Bri" if it contains strong evidence markers
+  if (lowercaseFact.includes(`name is ${botNameLower}`) || 
+    lowercaseFact.includes(`named ${botNameLower}`) ||
+    (lowercaseFact.includes('name') && lowercaseFact.includes(botNameLower))) {
+      
+      // Check if there's strong evidence this is correct (e.g., direct quotation)
+      const hasStrongEvidence = 
+        lowercaseFact.includes('explicitly stated') || 
+        lowercaseFact.includes(`"my name is ${botNameLower}"`) ||
+        lowercaseFact.includes(`'my name is ${botNameLower}'`);
+      
+      if (!hasStrongEvidence) {
+        logger.warn(`Filtered out likely incorrect name identification: "${fact}"`);
+        return false;
+      }
+    }
     
     // Filter out "not provided" statements (meta-statements about missing info)
     if (lowercaseFact.includes('not provided') || 
@@ -87,30 +108,32 @@ function postProcessExtractedFacts(facts) {
  * Two-stage memory extraction that first summarizes then infers preferences
  * @param {string} userId - User ID
  * @param {Array} conversation - Conversation history
+ * @param {string} botName - Name of the bot (default: "Bri")
  * @returns {Promise<Array<string>>} - Extracted memories
  */
-export async function enhancedMemoryExtraction(userId, conversation) {
+export async function enhancedMemoryExtraction(userId, conversation, botName = "Bri") {
   try {
     logger.info(`Running enhanced two-stage memory extraction for user ${userId}`);
     
     // Step 1: Generate conversation summary
-    const summary = await enhancedSummarizeConversation(conversation);
+    // Pass bot name to summarization function if it supports it
+    const summary = await enhancedSummarizeConversation(conversation, botName);
     if (!summary) {
       logger.warn(`Failed to generate summary for user ${userId}`);
       return [];
     }
     
-    // Step 2: Extract explicit facts from summary
-    const explicitFacts = await extractExplicitFacts(summary);
+    // Step 2: Extract explicit facts from summary with bot name awareness
+    const explicitFacts = await extractExplicitFacts(summary, botName);
     
-    // Step 3: Extract implied preferences and reactions
-    const impliedPreferences = await extractImpliedPreferences(summary, conversation);
+    // Step 3: Extract implied preferences and reactions with bot name awareness
+    const impliedPreferences = await extractImpliedPreferences(summary, conversation, botName);
     
     // Combine all extracted information
     const allExtractions = [...explicitFacts, ...impliedPreferences];
     
     // Post-process to filter, normalize, and deduplicate
-    const filteredExtractions = postProcessExtractedFacts(allExtractions);
+    const filteredExtractions = postProcessExtractedFacts(allExtractions, botName);
     const deduplicatedFacts = await deduplicateAgainstExisting(filteredExtractions, userId);
     
     logger.info(`Extracted ${deduplicatedFacts.length} memories for user ${userId}`);
@@ -124,12 +147,15 @@ export async function enhancedMemoryExtraction(userId, conversation) {
 /**
  * Extracts explicit facts from summary
  * @param {string} summary - Conversation summary
+ * @param {string} botName - Name of the bot (default: "Bri")
  * @returns {Promise<Array<string>>} - Extracted explicit facts
  */
-async function extractExplicitFacts(summary) {
+async function extractExplicitFacts(summary, botName = "Bri") {
   const explicitPrompt = `
 Extract ONLY clearly stated, explicit facts about the user from this conversation summary.
 Focus on biographical information, concrete details, and directly stated preferences.
+
+IMPORTANT: This conversation is with a Discord bot named "${botName}". The name "${botName}" often appears when users are addressing the bot (e.g., "Hey ${botName}", "Hello ${botName}"). DO NOT extract "${botName}" as the user's name unless there is explicit evidence that the user has directly stated "My name is ${botName}" or similar unambiguous declaration.
 
 Include:
 - Biographical information (name, age, location, etc.)
@@ -144,6 +170,7 @@ Exclude:
 - Hypothetical statements
 - Negative information (what they don't have/like)
 - Meta-statements about missing information
+- References to "${botName}" when users are addressing the bot
 
 Output ONLY a JSON array of facts:
 ["User's name is John", "User works as a software engineer"]
@@ -158,7 +185,7 @@ SUMMARY: ${summary}`;
       messages: [
         { 
           role: "system", 
-          content: "You extract only explicit, clearly stated facts about users. Be precise and factual."
+          content: `You extract only explicit, clearly stated facts about users. Be precise and factual. This conversation is with a bot named "${botName}". Be careful not to extract "${botName}" as the user's name when it appears in greetings to the bot.`
         },
         { role: "user", content: explicitPrompt }
       ],
@@ -188,9 +215,10 @@ SUMMARY: ${summary}`;
  * Extracts implied preferences from conversation context
  * @param {string} summary - Conversation summary
  * @param {Array} conversation - Original conversation
+ * @param {string} botName - Name of the bot (default: "Bri")
  * @returns {Promise<Array<string>>} - Extracted implied preferences
  */
-async function extractImpliedPreferences(summary, conversation) {
+async function extractImpliedPreferences(summary, conversation, botName = "Bri") {
   // Extract user messages for context
   const userMessages = conversation
     .filter(msg => msg.role === "user")
@@ -199,8 +227,10 @@ async function extractImpliedPreferences(summary, conversation) {
   
   const preferencePrompt = `
 Analyze this conversation summary and user messages to identify IMPLIED preferences and interests.
-Look for:
 
+IMPORTANT: This conversation is with a Discord bot named "${botName}". Many messages will start with phrases like "Hey ${botName}" or "Hi ${botName}" which are addressing the bot, not referring to the user. DO NOT infer that the user's name is ${botName} based on these greetings.
+
+Look for:
 1. Emotional reactions to topics (positive or negative)
 2. Engagement patterns (what topics the user engages with enthusiastically)
 3. Subtle cues about likes/dislikes without direct statements
@@ -217,6 +247,7 @@ Do NOT include:
 - General opinions unrelated to personal preferences
 - Highly uncertain inferences
 - "Not provided" statements
+- Any inference that the user's name is "${botName}" based on greetings to the bot
 
 Output ONLY a JSON array of inferred preferences:
 ["User enjoys action movies", "User is interested in astronomy"]
@@ -233,7 +264,7 @@ USER MESSAGES: ${userMessages}`;
       messages: [
         { 
           role: "system", 
-          content: "You extract implied preferences and interests from conversations. Be insightful but reasonably confident in your inferences."
+          content: `You extract implied preferences and interests from conversations. Be insightful but reasonably confident in your inferences. This conversation is with a bot named "${botName}". Be careful not to extract "${botName}" as the user's name when it appears in greetings to the bot.`
         },
         { role: "user", content: preferencePrompt }
       ],
