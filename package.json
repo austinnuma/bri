@@ -10,6 +10,7 @@
     "dotenv": "^16.x",
     "ffmpeg": "^0.0.4",
     "natural": "^8.0.1",
+    "node-cron": "^3.0.3",
     "openai": "^4.x",
     "winston": "^3.17.0",
     "ytdl-core": "^4.11.5"

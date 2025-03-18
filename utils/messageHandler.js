@@ -321,13 +321,54 @@ export async function handleLegacyMessage(message) {
     }
   }
   
-  // Handle image analysis if feature is enabled
-  if (imageAttachments.size > 0 && await isFeatureEnabled(guildId, 'character')) {
-    const imagesHandled = await handleImageAttachments(message, cleanedContent, guildId);
-    if (imagesHandled) {
-      return; // Exit early if we handled images
+ // Handle image analysis if feature is enabled
+ if (imageAttachments.size > 0 && await isFeatureEnabled(guildId, 'character')) {
+  // First check if this server has credits enabled
+  const serverConfig = await getServerConfig(guildId);
+  const creditsEnabled = serverConfig?.credits_enabled === true;
+  
+  // Import the subscription check function
+  const { isFeatureSubscribed, SUBSCRIPTION_FEATURES } = await import('./subscriptionManager.js');
+  
+  // Check if server has unlimited vision with subscription
+  const hasUnlimitedVision = await isFeatureSubscribed(guildId, SUBSCRIPTION_FEATURES.UNLIMITED_VISION);
+  
+  // If credits are enabled and server doesn't have unlimited vision, check credits
+  if (creditsEnabled && !hasUnlimitedVision) {
+    const operationType = 'VISION_ANALYSIS';
+    
+    // Check if server has enough credits
+    const hasCredits = await hasEnoughCredits(guildId, operationType);
+    
+    if (!hasCredits) {
+      // Get current credit information for a more helpful message
+      const credits = await getServerCredits(guildId);
+      
+      await message.reply(
+        `⚠️ **Not enough credits!** This server doesn't have enough credits to analyze images.\n` +
+        `💰 Available: ${credits?.remaining_credits || 0} credits\n` +
+        `💸 Required: ${CREDIT_COSTS['VISION_ANALYSIS']} credits\n\n` +
+        `You can purchase more credits or subscribe to our Enterprise plan for unlimited image analysis!`
+      );
+      return; // Exit without processing images
     }
   }
+  
+  // Process the images
+  const imagesHandled = await handleImageAttachments(message, cleanedContent, guildId);
+  
+  // If images were handled successfully and credits are enabled, use credits
+  if (imagesHandled && creditsEnabled && !hasUnlimitedVision) {
+    await useCredits(guildId, 'VISION_ANALYSIS');
+    logger.info(`Used ${CREDIT_COSTS['VISION_ANALYSIS']} credits for vision analysis in server ${guildId}`);
+  } else if (imagesHandled && hasUnlimitedVision) {
+    logger.info(`Processed image in server ${guildId} with Enterprise subscription (no credits used)`);
+  }
+  
+  if (imagesHandled) {
+    return; // Exit early if we handled images
+  }
+}
 
   // Memory command check - only if memory feature is enabled
   const memoryEnabled = await isFeatureEnabled(guildId, 'memory');

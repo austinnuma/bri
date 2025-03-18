@@ -230,14 +230,27 @@ async function manuallyCreateJournalTable() {
   }
 }
 
-/**
- * Creates a journal entry for a storyline update
+/** Creates a journal entry for a storyline update
  * @param {Object} storyline - Storyline object
  * @param {string} guildId - Guild ID
  * @returns {Promise<Object|null>} - Created journal entry
  */
 export async function createStorylineJournalEntry(storyline, guildId) {
   try {
+    // Import the subscription check
+    const { isFeatureSubscribed, SUBSCRIPTION_FEATURES } = await import('./subscriptionManager.js');
+    
+    // Check if this server has the journaling feature via subscription
+    const hasJournalingFeature = await isFeatureSubscribed(guildId, SUBSCRIPTION_FEATURES.JOURNALING);
+    
+    if (!hasJournalingFeature) {
+      logger.info(`Journal feature not available for guild ${guildId} - requires subscription`);
+      return {
+        error: 'subscription_required',
+        message: 'The journal feature requires a subscription. Subscribe to access Bri\'s journal capabilities.'
+      };
+    }
+    
     const latestUpdate = getLatestUpdate(storyline);
     
     if (!latestUpdate) {
@@ -277,6 +290,20 @@ export async function createStorylineJournalEntry(storyline, guildId) {
 // Modified function to create interest journal entry - now queues the interest instead of posting directly
 export async function createInterestJournalEntry(interest, isNew = false, guildId) {
   try {
+    // Import the subscription check
+    const { isFeatureSubscribed, SUBSCRIPTION_FEATURES } = await import('./subscriptionManager.js');
+    
+    // Check if this server has the journaling feature via subscription
+    const hasJournalingFeature = await isFeatureSubscribed(guildId, SUBSCRIPTION_FEATURES.JOURNALING);
+    
+    if (!hasJournalingFeature) {
+      logger.info(`Journal feature not available for guild ${guildId} - requires subscription`);
+      return {
+        error: 'subscription_required',
+        message: 'The journal feature requires a subscription. Subscribe to access Bri\'s journal capabilities.'
+      };
+    }
+    
     // Queue this interest update instead of immediately creating a journal entry
     const queueResult = await queueInterestForJournal(interest, isNew, guildId);
     
@@ -326,6 +353,20 @@ export async function createInterestJournalEntry(interest, isNew = false, guildI
 // Modified function to create a random daily journal entry - now uses the contextual generator
 export async function createRandomJournalEntry(guildId) {
   try {
+    // Import the subscription check
+    const { isFeatureSubscribed, SUBSCRIPTION_FEATURES } = await import('./subscriptionManager.js');
+    
+    // Check if this server has the journaling feature via subscription
+    const hasJournalingFeature = await isFeatureSubscribed(guildId, SUBSCRIPTION_FEATURES.JOURNALING);
+    
+    if (!hasJournalingFeature) {
+      logger.info(`Journal feature not available for guild ${guildId} - requires subscription`);
+      return {
+        error: 'subscription_required',
+        message: 'The journal feature requires a subscription. Subscribe to access Bri\'s journal capabilities.'
+      };
+    }
+    
     // Use the enhanced contextual entry generator instead of the old one
     const entry = await generateContextualJournalEntry(guildId);
     

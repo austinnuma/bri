@@ -1,9 +1,15 @@
 // commands/schedule.js
-import { SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
+import { SlashCommandBuilder, PermissionFlagsBits, EmbedBuilder } from 'discord.js';
 import { logger } from '../utils/logger.js';
 import { createScheduledMessage, getUserTimezone, getActiveScheduledMessages, cancelScheduledMessage } from '../utils/timeSystem.js';
 import { openai } from '../services/combinedServices.js';
 import { createClient } from '@supabase/supabase-js';
+
+// Import credit management functions
+import { hasEnoughCredits, useCredits, CREDIT_COSTS, getServerCredits } from '../utils/creditManager.js';
+import { getServerConfig } from '../utils/serverConfigManager.js';
+// Import subscription management functions
+import { isFeatureSubscribed, SUBSCRIPTION_FEATURES } from '../utils/subscriptionManager.js';
 
 // Initialize a dedicated Supabase client just for this command
 const schedulesDb = createClient(
@@ -99,20 +105,85 @@ export async function execute(interaction) {
         const subcommand = interaction.options.getSubcommand();
         logger.info(`Executing schedule command with subcommand: ${subcommand}`);
         
+        // List and cancel don't need credit or subscription checks
+        if (subcommand === 'list') {
+            await handleListSchedule(interaction);
+            return;
+        } else if (subcommand === 'cancel') {
+            await handleCancelSchedule(interaction);
+            return;
+        }
+        
+        // For creating schedules (daily or weekly), check credits and subscription
+        const guildId = interaction.guildId;
+        
+        // Check if this server has credits enabled
+        const serverConfig = await getServerConfig(guildId);
+        const creditsEnabled = serverConfig?.credits_enabled === true;
+        
+        // Check if server has unlimited scheduling with subscription
+        const hasUnlimitedScheduling = await isFeatureSubscribed(guildId, SUBSCRIPTION_FEATURES.UNLIMITED_SCHEDULING);
+        
+        // If credits are enabled and server doesn't have unlimited scheduling, check credits
+        if (creditsEnabled && !hasUnlimitedScheduling) {
+            const operationType = 'SCHEDULING';
+            
+            // Check if server has enough credits
+            const hasCredits = await hasEnoughCredits(guildId, operationType);
+            
+            if (!hasCredits) {
+                // Get current credit information for a more helpful message
+                const credits = await getServerCredits(guildId);
+                
+                const creditsEmbed = new EmbedBuilder()
+                    .setTitle('Insufficient Credits')
+                    .setDescription(`This server doesn't have enough credits to create a scheduled message.`)
+                    .setColor(0xFF0000)
+                    .addFields(
+                        {
+                            name: '💰 Available Credits',
+                            value: `${credits?.remaining_credits || 0} credits`,
+                            inline: true
+                        },
+                        {
+                            name: '💸 Required Credits',
+                            value: `${CREDIT_COSTS['SCHEDULING']} credits`,
+                            inline: true
+                        },
+                        {
+                            name: '📊 Credit Cost',
+                            value: `Creating a scheduled message costs ${CREDIT_COSTS['SCHEDULING']} credits.`,
+                            inline: true
+                        }
+                    )
+                    .setFooter({ 
+                        text: 'Purchase more credits or subscribe to Enterprise for unlimited scheduling!'
+                    });
+                    
+                return interaction.editReply({ embeds: [creditsEmbed] });
+            }
+        }
+        
+        // Process the schedule creation command
         if (subcommand === 'daily') {
             await handleDailySchedule(interaction);
         } else if (subcommand === 'weekly') {
             await handleWeeklySchedule(interaction);
-        } else if (subcommand === 'list') {
-            await handleListSchedule(interaction);
-        } else if (subcommand === 'cancel') {
-            await handleCancelSchedule(interaction);
         } else {
             logger.warn(`Unknown subcommand: ${subcommand}`);
             await interaction.editReply({
                 content: "Unknown subcommand. Please try again with a valid option.",
                 ephemeral: true
             });
+        }
+        
+        // If credits are enabled and server doesn't have unlimited scheduling, use credits
+        // Do this after successful creation
+        if (creditsEnabled && !hasUnlimitedScheduling) {
+            await useCredits(guildId, 'SCHEDULING');
+            logger.info(`Used ${CREDIT_COSTS['SCHEDULING']} credits for scheduling in server ${guildId}`);
+        } else if (hasUnlimitedScheduling) {
+            logger.info(`Created scheduled message in server ${guildId} with Enterprise subscription (no credits used)`);
         }
     } catch (error) {
         logger.error('Error in schedule command:', error);
@@ -204,7 +275,8 @@ async function handleDailySchedule(interaction) {
             message_type: messageType,
             message_content: messageContent,
             cron_schedule: cronSchedule,
-            timezone: guildTimezone
+            timezone: guildTimezone,
+            guild_id: interaction.guildId
         });
         
         if (!scheduled) {
@@ -283,7 +355,8 @@ async function handleWeeklySchedule(interaction) {
             message_type: 'weekly_custom',
             message_content: message,
             cron_schedule: cronSchedule,
-            timezone: guildTimezone
+            timezone: guildTimezone,
+            guild_id: interaction.guildId
         });
         
         if (!scheduled) {
@@ -376,7 +449,7 @@ Add appropriate emoji.
         const completion = await openai.chat.completions.create({
             model: "gpt-3.5-turbo",
             messages: [
-                { role: "system", content: "You are Bri, a friendly AI assistant with the personality of a cheerful 10-year-old girl." },
+                { role: "system", content: "You are Bri, a friendly AI assistant with the personality of a cheerful 14-year-old girl." },
                 { role: "user", content: prompt }
             ],
             max_tokens: 150,

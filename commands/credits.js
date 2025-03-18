@@ -3,7 +3,7 @@ import { SlashCommandBuilder, EmbedBuilder, PermissionFlagsBits } from 'discord.
 import { logger } from '../utils/logger.js';
 import { 
   getServerCredits, 
-  DEFAULT_FREE_MONTHLY_CREDITS, 
+  FREE_CREDITS_AMOUNT as DEFAULT_FREE_MONTHLY_CREDITS, 
   CREDIT_COSTS 
 } from '../utils/creditManager.js';
 import { getServerConfig } from '../utils/serverConfigManager.js';

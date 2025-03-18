@@ -256,6 +256,32 @@ try {
   logger.error("Error initializing time system:", error);
 }
 
+// Initialize credit system
+try {
+  await initializeCreditSystem();
+  logger.info("Credit system initialized");
+} catch (error) {
+  logger.error("Error initializing credit system:", error);
+}
+
+// Initialize subscription system
+try {
+  const { initializeSubscriptionSystem } = await import('./utils/subscriptionManager.js');
+  await initializeSubscriptionSystem();
+  logger.info("Subscription system initialized");
+} catch (error) {
+  logger.error("Error initializing subscription system:", error);
+}
+
+// Initialize monthly credit rollover
+try {
+  const { initializeMonthlyCreditRollover } = await import('./utils/monthlyCreditRollover.js');
+  initializeMonthlyCreditRollover();
+  logger.info("Monthly credit rollover scheduled");
+} catch (error) {
+  logger.error("Error initializing monthly credit rollover:", error);
+}
+
 
 /**
  * Test database connection and tables

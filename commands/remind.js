@@ -6,6 +6,8 @@ import { createEvent, getUserTimezone, parseTimeSpecification, EVENT_TYPES, REMI
 // Import credit management functions
 import { hasEnoughCredits, useCredits, CREDIT_COSTS, getServerCredits } from '../utils/creditManager.js';
 import { getServerConfig } from '../utils/serverConfigManager.js';
+// Import subscription management functions
+import { isFeatureSubscribed, SUBSCRIPTION_FEATURES } from '../utils/subscriptionManager.js';
 
 export const data = new SlashCommandBuilder()
     .setName('remind')
@@ -48,8 +50,11 @@ export async function execute(interaction) {
         const serverConfig = await getServerConfig(guildId);
         const creditsEnabled = serverConfig?.credits_enabled === true;
         
-        // If credits are enabled, check if there are enough credits
-        if (creditsEnabled) {
+        // Check if user has unlimited reminders with subscription
+        const hasUnlimitedReminders = await isFeatureSubscribed(guildId, SUBSCRIPTION_FEATURES.UNLIMITED_REMINDERS);
+        
+        // If credits are enabled and user doesn't have unlimited reminders, check if there are enough credits
+        if (creditsEnabled && !hasUnlimitedReminders) {
             const operationType = 'REMINDER_CREATION';
             
             // Check if server has enough credits
@@ -81,7 +86,7 @@ export async function execute(interaction) {
                         }
                     )
                     .setFooter({ 
-                        text: 'Purchase more credits on the Bri website or wait for your monthly refresh.'
+                        text: 'Purchase more credits or subscribe to Premium for unlimited reminders!'
                     });
                     
                 return interaction.editReply({ embeds: [creditsEmbed] });
@@ -137,10 +142,12 @@ export async function execute(interaction) {
             return interaction.editReply("Sorry, I couldn't create that reminder. Please try again.");
         }
         
-        // If credits are enabled, use credits AFTER successful reminder creation
-        if (creditsEnabled) {
+        // If credits are enabled and user doesn't have unlimited reminders, use credits
+        if (creditsEnabled && !hasUnlimitedReminders) {
             await useCredits(guildId, 'REMINDER_CREATION');
             logger.info(`Used ${CREDIT_COSTS['REMINDER_CREATION']} credits for reminder creation in server ${guildId}`);
+        } else if (hasUnlimitedReminders) {
+            logger.info(`Created reminder in server ${guildId} with Premium subscription (no credits used)`);
         }
         
         // Format the reminder time in the user's timezone
