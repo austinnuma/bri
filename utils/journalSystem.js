@@ -3,6 +3,16 @@ import { openai, supabase } from '../services/combinedServices.js';
 import { logger } from './logger.js';
 import { getEmbedding } from './improvedEmbeddings.js';
 import { normalizeText } from './textUtils.js';
+import {
+  initializeCharacterSheetSystem,
+  queueInterestForJournal,
+  processConsolidatedInterestUpdates,
+  scheduleRoutineJournalEntries,
+  schedulePendingInterestCheck,
+  generateContextualJournalEntry,
+  updateCharacterSheetFromEntry
+} from './briCharacterSheet.js';
+
 
 // Reference to Discord client (set during initialization)
 let discordClientRef = null;
@@ -23,12 +33,8 @@ export const JOURNAL_ENTRY_TYPES = {
 // Store by guild ID
 const pendingEntries = new Map();
 
-/**
- * Initialize the journal system
- * @param {Object} client - Discord client
- * @param {string} channelId - Channel ID for journal entries (optional)
- * @param {string} guildId - Guild ID where the channel is located (optional)
- */
+
+// Modify the initializeJournalSystem function to also initialize the character sheet system
 export async function initializeJournalSystem(client, channelId, guildId) {
   try {
     // If a specific guild was provided, log it, otherwise indicate it's global initialization
@@ -87,19 +93,35 @@ export async function initializeJournalSystem(client, channelId, guildId) {
       logger.info("Journal entries table already exists");
     }
     
+    // Initialize the character sheet system
+    try {
+      await initializeCharacterSheetSystem();
+      logger.info("Character sheet system initialized");
+    } catch (characterSheetError) {
+      logger.error("Error initializing character sheet system:", characterSheetError);
+    }
+    
     // Process any pending entries for this guild or all guilds if guildId is not provided
     await processPendingEntries(guildId);
     
-    // If a specific guild ID was provided, schedule random entries for that guild
+    // If a specific guild ID was provided, schedule for that guild
     if (guildId) {
-      scheduleRandomJournalEntries(guildId);
+      // Schedule the enhanced journal entries
+      await scheduleRoutineJournalEntries(guildId);
+      
+      // Schedule the interest check
+      schedulePendingInterestCheck(guildId);
     } else {
       // If no specific guild was provided, schedule for all known guilds
       const allGuildIds = Array.from(journalChannels.keys());
       for (const gId of allGuildIds) {
         // Skip the "legacy" key as it's not a real guild ID
         if (gId !== 'legacy') {
-          scheduleRandomJournalEntries(gId);
+          // Schedule the enhanced journal entries
+          await scheduleRoutineJournalEntries(gId);
+          
+          // Schedule the interest check
+          schedulePendingInterestCheck(gId);
         }
       }
     }
@@ -252,49 +274,104 @@ export async function createStorylineJournalEntry(storyline, guildId) {
   }
 }
 
-/**
- * Creates a journal entry for a new or updated interest
- * @param {Object} interest - Interest object
- * @param {boolean} isNew - Whether this is a new interest
- * @param {string} guildId - Guild ID
- * @returns {Promise<Object|null>} - Created journal entry
- */
+// Modified function to create interest journal entry - now queues the interest instead of posting directly
 export async function createInterestJournalEntry(interest, isNew = false, guildId) {
   try {
-    // Generate a journal-style entry using OpenAI
-    const entry = await generateInterestJournalEntry(interest, isNew);
+    // Queue this interest update instead of immediately creating a journal entry
+    const queueResult = await queueInterestForJournal(interest, isNew, guildId);
     
-    // Post to Discord
-    const message = await postJournalEntry(entry.title, entry.content, guildId);
+    if (!queueResult) {
+      logger.error(`Failed to queue interest ${interest.name} for journal in guild ${guildId}`);
+      
+      // Fallback to original behavior
+      logger.info(`Falling back to immediate interest journal entry for ${interest.name}`);
+      
+      // Generate a journal-style entry using OpenAI
+      const entry = await generateInterestJournalEntry(interest, isNew);
+      
+      // Post to Discord
+      const message = await postJournalEntry(entry.title, entry.content, guildId);
+      
+      // Store in database
+      const storedEntry = await storeJournalEntry({
+        entry_type: isNew ? JOURNAL_ENTRY_TYPES.NEW_INTEREST : JOURNAL_ENTRY_TYPES.INTEREST_UPDATE,
+        title: entry.title,
+        content: entry.content,
+        related_id: interest.id.toString(),
+        metadata: {
+          interest_id: interest.id,
+          interest_name: interest.name,
+          interest_level: interest.level,
+          is_new_interest: isNew
+        },
+        guild_id: guildId
+      });
+      
+      return storedEntry;
+    }
     
-    // Store in database
-    const storedEntry = await storeJournalEntry({
-      entry_type: isNew ? JOURNAL_ENTRY_TYPES.NEW_INTEREST : JOURNAL_ENTRY_TYPES.INTEREST_UPDATE,
-      title: entry.title,
-      content: entry.content,
-      related_id: interest.id.toString(),
-      metadata: {
-        interest_id: interest.id,
-        interest_name: interest.name,
-        interest_level: interest.level,
-        is_new_interest: isNew
-      },
+    // Return a placeholder response
+    return {
+      queued: true,
+      interest_name: interest.name,
+      is_new: isNew,
       guild_id: guildId
-    });
-    
-    return storedEntry;
+    };
   } catch (error) {
     logger.error(`Error creating interest journal entry: ${error}`);
     return null;
   }
 }
 
-/**
- * Creates a random daily journal entry
- * @param {string} guildId - Guild ID
- * @returns {Promise<Object|null>} - Created journal entry
- */
+// Modified function to create a random daily journal entry - now uses the contextual generator
 export async function createRandomJournalEntry(guildId) {
+  try {
+    // Use the enhanced contextual entry generator instead of the old one
+    const entry = await generateContextualJournalEntry(guildId);
+    
+    if (!entry) {
+      logger.error(`Failed to generate contextual journal entry for guild ${guildId}`);
+      
+      // Fallback to old method if new method fails
+      return await createFallbackRandomJournalEntry(guildId);
+    }
+    
+    // Post to Discord
+    const message = await postJournalEntry(entry.title, entry.content, guildId);
+    
+    // Store in database
+    const storedEntry = await storeJournalEntry({
+      entry_type: JOURNAL_ENTRY_TYPES.DAILY_THOUGHT,
+      title: entry.title,
+      content: entry.content,
+      related_id: null,
+      metadata: {
+        contextual: true,
+        hour_of_day: new Date().getHours()
+      },
+      guild_id: guildId
+    });
+    
+    // Update character sheet with this new entry
+    try {
+      await updateCharacterSheetFromEntry(guildId, {
+        title: entry.title,
+        content: entry.content,
+        created_at: new Date().toISOString()
+      });
+    } catch (updateError) {
+      logger.error(`Error updating character sheet from entry: ${updateError}`);
+    }
+    
+    return storedEntry;
+  } catch (error) {
+    logger.error(`Error creating random journal entry: ${error}`);
+    return await createFallbackRandomJournalEntry(guildId);
+  }
+}
+
+// Fallback to original implementation if the new method fails
+async function createFallbackRandomJournalEntry(guildId) {
   try {
     // Get existing interests to potentially reference
     const { data: interests, error: interestsError } = await supabase
@@ -343,10 +420,11 @@ export async function createRandomJournalEntry(guildId) {
     
     return storedEntry;
   } catch (error) {
-    logger.error(`Error creating random journal entry: ${error}`);
+    logger.error(`Error in fallback journal entry: ${error}`);
     return null;
   }
 }
+
 
 /**
  * Gets the channel ID for a specific guild
@@ -1035,4 +1113,13 @@ export default {
   getRelatedJournalEntries,
   searchJournalEntries,
   JOURNAL_ENTRY_TYPES
+};
+
+// Export the new functions so they can be used elsewhere
+export {
+  processConsolidatedInterestUpdates,
+  generateContextualJournalEntry,
+  updateCharacterSheetFromEntry,
+  postJournalEntry,
+  storeJournalEntry
 };

@@ -4,6 +4,7 @@ import { logger } from './logger.js';
 import { getEmbedding } from './improvedEmbeddings.js';
 import { normalizeText } from './textUtils.js';
 import { createStorylineJournalEntry, createInterestJournalEntry } from './journalSystem.js';
+import { queueInterestForJournal } from './briCharacterSheet.js';
 
 
 // Constants for relationship levels
@@ -691,14 +692,15 @@ async function updateOrCreateGuildInterest(guildId, interestId, interestData, us
         return null;
       }
       
-      // Create a journal entry for this guild
+      // Queue a journal entry for this new interest instead of creating immediately
       try {
         const globalInterest = await getInterestById(interestId);
         if (globalInterest) {
-          await createInterestJournalEntry({...globalInterest, ...data}, true, guildId);
+          await queueInterestForJournal({...globalInterest, ...data}, true, guildId);
+          logger.info(`Queued journal entry for new interest ${globalInterest.name} in guild ${guildId}`);
         }
       } catch (journalError) {
-        logger.error(`Error creating guild journal entry for new interest:`, journalError);
+        logger.error(`Error queuing guild journal entry for new interest:`, journalError);
       }
       
       return data;
@@ -734,16 +736,17 @@ async function updateOrCreateGuildInterest(guildId, interestId, interestData, us
         return null;
       }
       
-      // Create journal entry if level increased significantly
+      // Queue journal entry if level increased significantly
       const levelIncreased = newLevel - guildInterest.level;
       if (levelIncreased >= 2 || newLevel >= 4) {
         try {
           const globalInterest = await getInterestById(interestId);
           if (globalInterest) {
-            await createInterestJournalEntry({...globalInterest, ...data}, false, guildId);
+            await queueInterestForJournal({...globalInterest, ...data}, false, guildId);
+            logger.info(`Queued journal entry for updated interest ${globalInterest.name} in guild ${guildId}`);
           }
         } catch (journalError) {
-          logger.error(`Error creating guild journal entry for updated interest:`, journalError);
+          logger.error(`Error queuing guild journal entry for updated interest:`, journalError);
         }
       }
       
