@@ -107,7 +107,7 @@ IMPORTANT CONTEXT: This is a conversation with a Discord bot named "${botName}".
 
 Focus especially on:
 1. Personal information about the user
-2. Both EXPLICIT preferences (directly stated likes/dislikes)
+2. EXPLICIT preferences (directly stated likes/dislikes)
 3. IMPLICIT preferences (revealed through reactions and engagement)
 4. Any emotional responses to topics that might indicate interests or preferences
 

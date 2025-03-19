@@ -666,8 +666,8 @@ export async function curateMemoriesWithAI(userId) {
     }
   }
   
-  // Schedule it weekly
-  const WEEKLY = 7 * 24 * 60 * 60 * 1000;
+  // Schedule it daily
+  const WEEKLY = 24 * 60 * 60 * 1000;
   setInterval(runAIMemoryCuration, WEEKLY);
-    logger.info("Scheduled AI memory curation to run weekly");
+    logger.info("Scheduled AI memory curation to run daily");
   

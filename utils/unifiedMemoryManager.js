@@ -21,7 +21,17 @@ import {
   getUserConversation,
   setUserConversation
 } from './db/userSettings.js';
+import { 
+  calculateInitialConfidence, 
+  processRetrievedMemories,
+} from './memoryConfidence.js';
 
+import {
+  retrieveMemoriesWithConfidence,
+  contextAwareMemoryRetrieval,
+  updateMemoryAccessStats,
+  updateOverlappingMemoriesConfidence
+} from './enhancedMemoryRetrieval.js';
 
 
 // Initialize Supabase client using environment variables.
@@ -313,29 +323,41 @@ async function findSimilarMemory(userId, memoryText, guildId) {
  */
 export async function createMemory(userId, memoryText, memoryType, category, confidence, source, guildId) {
   try {
+    // Calculate initial confidence based on multiple factors
+    const initialConfidence = calculateInitialConfidence(memoryType, source, category, memoryText);
     // Get embedding
     const embedding = await getEmbedding(memoryText);
     
     // Insert the memory
     const { data, error } = await supabase
-      .from('unified_memories')
-      .insert({
-        user_id: userId,
-        guild_id: guildId,
-        memory_text: memoryText,
-        embedding: embedding,
-        memory_type: memoryType,
-        category: category,
-        confidence: confidence,
-        source: source
+    .from('unified_memories')
+    .insert({
+      user_id: userId,
+      guild_id: guildId,
+      memory_text: memoryText,
+      embedding: embedding,
+      memory_type: memoryType,
+      category: category,
+      confidence: initialConfidence, // Use calculated confidence
+      source: source,
+      created_at: new Date().toISOString(),
+      last_accessed: null,
+      access_count: 0,
+      verified: memoryType === MemoryTypes.EXPLICIT, // Explicit memories start verified
+      verification_date: memoryType === MemoryTypes.EXPLICIT ? new Date().toISOString() : null,
+      contradiction_count: 0
       })
-      .select()
-      .single();
-      
+        .select()
+        .single();
+        
     if (error) {
       logger.error("Error creating memory", { error, userId, guildId });
       return null;
     }
+
+    // Update confidence of overlapping memories
+    updateOverlappingMemoriesConfidence(userId, memoryText, data.id, guildId)
+      .catch(err => logger.error("Error updating overlapping memories:", err));
     
     return data;
   } catch (error) {
@@ -417,14 +439,23 @@ export async function insertIntuitedMemory(userId, memoryText, confidence = 0.8,
     // Categorize the memory
     const category = categorizeMemory(memoryText);
     
-    // Create a new intuited memory
+    // Use the enhanced initial confidence calculation
+    const calculatedConfidence = calculateInitialConfidence(
+      MEMORY_TYPES.INTUITED,
+      'conversation_extraction',
+      category,
+      memoryText
+    );
+    
+    // Create a new intuited memory with the calculated confidence
     return await createMemory(
       userId,
       memoryText,
       MEMORY_TYPES.INTUITED,
       category,
-      confidence,
-      'conversation_extraction'
+      calculatedConfidence, // Use calculated confidence instead of fixed 0.8
+      'conversation_extraction',
+      guildId
     );
   } catch (error) {
     logger.error("Error inserting intuited memory", { error });
@@ -443,43 +474,8 @@ export async function insertIntuitedMemory(userId, memoryText, confidence = 0.8,
  * @returns {Promise<string>} - Relevant memories as text
  */
 export async function retrieveRelevantMemories(userId, query, limit = 5, memoryType = null, category = null, guildId) {
-  try {
-    // Get embedding for query
-    const embedding = await getEmbedding(query);
-    
-    // Use the specialized function for vector search
-    const matches = await cachedVectorSearch(userId, embedding, {
-      threshold: 0.6,
-      limit,
-      memoryType,
-      category,
-      guildId
-    });
-    
-    if (!matches || matches.length === 0) {
-      return "";
-    }
-    
-    // Sort by confidence * distance to get most reliable and relevant memories first
-    const sortedData = [...matches].sort((a, b) => 
-      (b.confidence * b.distance) - (a.confidence * a.distance)
-    );
-    
-    // Format memories, adding confidence indicator for intuited memories
-    const formattedMemories = sortedData.map(memory => {
-      if (memory.memory_type === 'intuited' && memory.confidence < 0.9) {
-        // For lower confidence intuited memories, add an indicator
-        return `${memory.memory_text} (I think)`;
-      }
-      return memory.memory_text;
-    });
-    
-    return formattedMemories.join("\n");
-  } catch (error) {
-    // Make sure to capture and log the full error
-    logger.error("Error in retrieveRelevantMemories:", error, error.stack, { userId, guildId });
-    return "";
-  }
+  // Use the enhanced retrieval function instead
+  return await retrieveMemoriesWithConfidence(userId, query, limit, memoryType, category, guildId);
 }
 
 /**
@@ -490,9 +486,16 @@ export async function retrieveRelevantMemories(userId, query, limit = 5, memoryT
  * @param {string} guildId - The guild ID
  * @returns {Promise<string>} - Combined system prompt
  */
-export async function getCombinedSystemPromptWithMemories(userId, basePrompt, query, guildId) {
-  // Get all types of relevant memories
-  const allMemories = await retrieveRelevantMemories(userId, query, 6, null, null, guildId);
+export async function getCombinedSystemPromptWithMemories(userId, basePrompt, query, guildId, conversation = null) {
+  // If conversation context is provided, use context-aware retrieval
+  let allMemories;
+  
+  if (conversation && conversation.length > 0) {
+    allMemories = await contextAwareMemoryRetrieval(userId, query, conversation, guildId);
+  } else {
+    // Otherwise fall back to standard retrieval
+    allMemories = await retrieveMemoriesWithConfidence(userId, query, 6, null, null, guildId);
+  }
   
   // Only append memories if there are any
   let combined = basePrompt;

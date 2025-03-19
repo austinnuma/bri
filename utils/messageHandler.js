@@ -43,6 +43,11 @@ import {
   CREDIT_COSTS, 
   getServerCredits 
 } from './creditManager.js';
+import { 
+  getMemoriesForVerification, 
+  generateVerificationQuestion,
+  processVerificationResponse 
+} from './memoryVerification.js';
 
 
 // No longer using in-memory Maps, using database functions instead
@@ -65,6 +70,9 @@ function normalizeForComparison(text) {
     .replace(/\s{2,}/g, " ")
     .trim();
 }
+
+// Track which users have pending memory verifications
+const pendingVerifications = new Map();
 
 
 /**
@@ -285,6 +293,26 @@ export async function handleLegacyMessage(message) {
 
   const isDesignated = serverConfig.designated_channels.includes(message.channel.id);
   let cleanedContent = message.content;
+
+   // Check if this is a response to a verification question
+   if (pendingVerifications.has(userGuildKey)) {
+     const verification = pendingVerifications.get(userGuildKey);
+     
+     // Process the verification response
+     const result = await processVerificationResponse(
+       message.author.id, 
+       verification.memoryId, 
+       cleanedContent,
+       guildId
+     );
+     
+     if (result.success) {
+       // Clear the pending verification
+       pendingVerifications.delete(userGuildKey);
+       
+       // No need to respond here - continue with normal message processing
+     }
+   }
   
   // Check for attached images and store the result
   const imageAttachments = message.attachments.filter(isImageAttachment);
@@ -500,7 +528,7 @@ export async function handleLegacyMessage(message) {
     // Apply emoticons
     reply = replaceEmoticons(reply);
 
-    // Update conversation with Bri's response - MOVED INSIDE try block
+    // Update conversation with Bri's response 
     conversation.push({ role: "assistant", content: reply });
     
     // Get dynamic prompt directly from database
@@ -538,6 +566,36 @@ export async function handleLegacyMessage(message) {
       }
     }
 
+  // After successfully responding to the user, maybe insert a verification question
+  // Only do this occasionally (e.g., 10% chance)
+  const memoryEnabled = await isFeatureEnabled(guildId, 'memory');
+  if (memoryEnabled && Math.random() < 0.1 && !pendingVerifications.has(userGuildKey)) {
+    try {
+      // Get memories that need verification
+      const memoriesToVerify = await getMemoriesForVerification(message.author.id, guildId);
+      
+      if (memoriesToVerify.length > 0) {
+        // Select a random memory to verify
+        const memoryToVerify = memoriesToVerify[Math.floor(Math.random() * memoriesToVerify.length)];
+        
+        // Generate a natural verification question
+        const verificationQuestion = generateVerificationQuestion(memoryToVerify);
+        
+        // Send the question
+        await message.channel.send(verificationQuestion);
+        
+        // Store the pending verification
+        pendingVerifications.set(userGuildKey, {
+          memoryId: memoryToVerify.id,
+          timestamp: Date.now()
+        });
+      }
+    } catch (error) {
+      logger.error("Error generating verification question:", error);
+      // Don't let verification errors disrupt normal flow
+    }
+  }
+
     // Memory extraction if memory feature is enabled - still inside try block
     if (memoryEnabled) {
       // Increment message counter for this user - now with guild context
@@ -573,6 +631,17 @@ export async function handleLegacyMessage(message) {
 
   // No code should be here that depends on variables defined within the try block
 }
+
+// Clean up stale verification requests periodically
+setInterval(() => {
+  const now = Date.now();
+    // Remove verification requests older than 2 minutes
+    for (const [key, verification] of pendingVerifications.entries()) {
+      if (now - verification.timestamp > 2 * 60 * 1000) {
+        pendingVerifications.delete(key);
+      }
+    }
+}, 60 * 1000); // Run every minute
 
 /**
  * Updates the user mapping table with the latest user information

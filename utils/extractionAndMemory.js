@@ -170,7 +170,6 @@ Exclude:
 - Implied preferences without direct statements
 - Uncertain information (might, maybe, possibly)
 - Hypothetical statements
-- Negative information (what they don't have/like)
 - Meta-statements about missing information
 - References to "${botName}" when users are addressing the bot
 

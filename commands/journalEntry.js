@@ -3,6 +3,8 @@ import { SlashCommandBuilder, PermissionFlagsBits } from 'discord.js';
 import { createRandomJournalEntry, createStorylineJournalEntry, createInterestJournalEntry, JOURNAL_ENTRY_TYPES } from '../utils/journalSystem.js';
 import { logger } from '../utils/logger.js';
 import { supabase } from '../services/combinedServices.js';
+import { manualTriggerJournalEntry } from '../utils/briCharacterSheet.js';
+//import { manual } from 'openai/src/_shims/manual-types.mjs';
 
 export const data = new SlashCommandBuilder()
   .setName('journal-entry')
@@ -23,11 +25,20 @@ export async function execute(interaction) {
   
   try {
     const entryType = interaction.options.getString('type');
+    // Extract the guild ID from the interaction
+    const guildId = interaction.guild?.id;
+    
+    // Check if we have a valid guild ID
+    if (!guildId) {
+      logger.error("No guild ID found in interaction");
+      await interaction.editReply('This command can only be used in a server.');
+      return;
+    }
     
     switch (entryType) {
       case 'random':
         // Create a random journal entry
-        await createRandomJournalEntry();
+        await manualTriggerJournalEntry(guildId);
         await interaction.editReply('Created a random journal entry');
         break;
         
@@ -51,7 +62,7 @@ export async function execute(interaction) {
         }
         
         const randomStoryline = storylines[Math.floor(Math.random() * storylines.length)];
-        await createStorylineJournalEntry(randomStoryline);
+        await createStorylineJournalEntry(randomStoryline, guildId);
         await interaction.editReply(`Created a journal entry for storyline: ${randomStoryline.title}`);
         break;
         
@@ -75,7 +86,7 @@ export async function execute(interaction) {
         
         const randomInterest = interests[Math.floor(Math.random() * interests.length)];
         const isNew = Math.random() < 0.3; // 30% chance to treat as a new interest
-        await createInterestJournalEntry(randomInterest, isNew);
+        await createInterestJournalEntry(randomInterest, isNew, guildId);
         await interaction.editReply(`Created a journal entry for interest: ${randomInterest.name}`);
         break;
         

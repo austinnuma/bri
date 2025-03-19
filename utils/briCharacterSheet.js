@@ -282,7 +282,7 @@ IMPORTANT: Maintain the same structure as the original objects. Include ALL exis
 `;
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo-16k",
+      model: "gpt-4o-mini",
       messages: [
         { 
           role: "system", 
@@ -492,7 +492,7 @@ Format your response as JSON:
 `;
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
+      model: "gpt-4o-mini",
       messages: [
         { 
           role: "system", 
@@ -522,157 +522,257 @@ Format your response as JSON:
  * @returns {Promise<Object|null>} - Generated entry with title and content
  */
 export async function generateContextualJournalEntry(guildId, currentTime = new Date()) {
-  try {
-    // Get character sheet and routine
-    const { sheet, routine } = await getCharacterSheet(guildId);
-    
-    // Get timezone for this guild (using first user's timezone as fallback)
-    let timezone = 'America/New_York'; // Default fallback
     try {
-      const { data: timezoneData } = await supabase
-        .from('user_timezones')
-        .select('timezone')
-        .eq('guild_id', guildId)
-        .limit(1)
-        .single();
-        
-      if (timezoneData && timezoneData.timezone) {
-        timezone = timezoneData.timezone;
-      }
-    } catch (tzError) {
-      logger.debug(`Using default timezone for journal entry: ${tzError.message}`);
-    }
-    
-    // Get time context
-    const localTime = new Date(currentTime.toLocaleString('en-US', { timeZone: timezone }));
-    const hour = localTime.getHours();
-    const dayOfWeek = localTime.getDay(); // 0 = Sunday, 6 = Saturday
-    const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
-    const isSchoolDay = !isWeekend && !isHoliday(localTime);
-    
-    // Determine general time of day
-    let timeOfDay;
-    if (hour >= 5 && hour < 12) {
-      timeOfDay = "morning";
-    } else if (hour >= 12 && hour < 17) {
-      timeOfDay = "afternoon";
-    } else if (hour >= 17 && hour < 22) {
-      timeOfDay = "evening";
-    } else {
-      timeOfDay = "night";
-    }
-    
-    // Determine specific context based on time and routine
-    let specificContext;
-    if (isSchoolDay) {
-      if (hour >= 5 && hour < 8) {
-        specificContext = "before school";
-      } else if (hour >= 8 && hour < 15) {
-        specificContext = "at school";
-      } else if (hour >= 15 && hour < 17) {
-        specificContext = "after school";
-      } else {
-        specificContext = "evening at home";
-      }
-    } else {
-      // Weekend or holiday
-      if (hour < 10) {
-        specificContext = "weekend morning";
-      } else if (hour >= 10 && hour < 18) {
-        specificContext = "weekend day";
-      } else {
-        specificContext = "weekend evening";
-      }
-    }
-    
-    // Format date
-    const dateString = localTime.toLocaleDateString('en-US', {
-      weekday: 'long',
-      year: 'numeric',
-      month: 'long',
-      day: 'numeric'
-    });
-    
-    // Format time
-    const timeString = localTime.toLocaleTimeString('en-US', {
-      hour: 'numeric',
-      minute: 'numeric'
-    });
-    
-    // Get recent journal entries for context
-    const { data: recentEntries, error: entriesError } = await supabase
-      .from('bri_journal_entries')
-      .select('title, content, created_at')
-      .eq('guild_id', guildId)
-      .order('created_at', { ascending: false })
-      .limit(3);
+      // Get character sheet and routine
+      const { sheet, routine } = await getCharacterSheet(guildId);
       
-    if (entriesError) {
-      logger.error(`Error fetching recent journal entries for guild ${guildId}:`, entriesError);
+      // Get timezone for this guild (using first user's timezone as fallback)
+      let timezone = 'America/New_York'; // Default fallback
+      try {
+        const { data: timezoneData } = await supabase
+          .from('user_timezones')
+          .select('timezone')
+          .eq('guild_id', guildId)
+          .limit(1)
+          .single();
+          
+        if (timezoneData && timezoneData.timezone) {
+          timezone = timezoneData.timezone;
+        }
+      } catch (tzError) {
+        logger.debug(`Using default timezone for journal entry: ${tzError.message}`);
+      }
+      
+      // Get time context
+      const localTime = new Date(currentTime.toLocaleString('en-US', { timeZone: timezone }));
+      const hour = localTime.getHours();
+      const dayOfWeek = localTime.getDay(); // 0 = Sunday, 6 = Saturday
+      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
+      const isSchoolDay = !isWeekend && !isHoliday(localTime);
+      
+      // Determine general time of day
+      let timeOfDay;
+      if (hour >= 5 && hour < 12) {
+        timeOfDay = "morning";
+      } else if (hour >= 12 && hour < 17) {
+        timeOfDay = "afternoon";
+      } else if (hour >= 17 && hour < 22) {
+        timeOfDay = "evening";
+      } else {
+        timeOfDay = "night";
+      }
+      
+      // Determine specific context based on time and routine
+      let specificContext;
+      if (isSchoolDay) {
+        if (hour >= 5 && hour < 8) {
+          specificContext = "before school";
+        } else if (hour >= 8 && hour < 15) {
+          specificContext = "at school";
+        } else if (hour >= 15 && hour < 17) {
+          specificContext = "after school";
+        } else {
+          specificContext = "evening at home";
+        }
+      } else {
+        // Weekend or holiday
+        if (hour < 10) {
+          specificContext = "weekend morning";
+        } else if (hour >= 10 && hour < 18) {
+          specificContext = "weekend day";
+        } else {
+          specificContext = "weekend evening";
+        }
+      }
+      
+      // Format date
+      const dateString = localTime.toLocaleDateString('en-US', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric'
+      });
+      
+      // Format time
+      const timeString = localTime.toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: 'numeric'
+      });
+      
+      // Get recent journal entries for context
+      const { data: recentEntries, error: entriesError } = await supabase
+        .from('bri_journal_entries')
+        .select('title, content, created_at')
+        .eq('guild_id', guildId)
+        .order('created_at', { ascending: false })
+        .limit(3);
+        
+      if (entriesError) {
+        logger.error(`Error fetching recent journal entries for guild ${guildId}:`, entriesError);
+      }
+      
+      const recentEntriesText = recentEntries ? 
+        recentEntries.map(entry => 
+          `TITLE: ${entry.title}\nCONTENT: ${entry.content}\nDATE: ${new Date(entry.created_at).toLocaleDateString()}`
+        ).join('\n\n') : 
+        "No recent entries.";
+      
+      // Prepare the prompt with all context
+      const prompt = `
+  Generate a journal entry written by Bri, a 14-year-old girl, on ${dateString} at ${timeString} (${timeOfDay}, ${specificContext}).
+  
+  CHARACTER SHEET:
+  ${JSON.stringify(sheet, null, 2)}
+  
+  ROUTINE:
+  ${JSON.stringify(routine, null, 2)}
+  
+  TIME CONTEXT:
+  - Current date and time: ${dateString}, ${timeString}
+  - Day of week: ${['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][dayOfWeek]}
+  - Is weekend: ${isWeekend}
+  - Is school day: ${isSchoolDay}
+  - Time of day: ${timeOfDay}
+  - Specific context: ${specificContext}
+  
+  RECENT JOURNAL ENTRIES (for context only, don't repeat these topics directly):
+  ${recentEntriesText}
+  
+  Write a personal journal entry that:
+  1. Is completely authentic to a 14-year-old girl's writing style
+  2. Is appropriate for the current time, day, and context
+  3. Reflects her character and routine
+  4. Includes specific details about what she's doing, thinking, or feeling right now
+  5. Is 2-4 paragraphs long
+  6. Shows authentic emotions
+  7. Occasionally references previously mentioned friends, family, hobbies, or events from her character sheet
+  8. Is NOT repetitive of recent entries
+  9. Feels spontaneous and genuine, as if actually written by a real teen in their journal
+  
+  Format your response as a valid JSON with the following structure:
+  {
+    "title": "Journal title (creative and authentic to teen journal)",
+    "content": "The full journal entry text (2-4 paragraphs)"
+  }
+  
+  Make sure your response is properly formatted JSON that can be parsed. Include both a title and content field.
+  `;
+  
+      // Option 1: Use gpt-3.5-turbo (without 16k) which supports response_format
+      const completion = await openai.chat.completions.create({
+        model: "gpt-4o-mini", // Changed from gpt-3.5-turbo-16k to standard gpt-3.5-turbo
+        messages: [
+          { 
+            role: "system", 
+            content: "You are a creative writer specialized in authentic teen journal writing. Generate journal entries that sound like they were truly written by a 14-year-old girl, with age-appropriate vocabulary, concerns, and style."
+          },
+          { role: "user", content: prompt }
+        ],
+        max_tokens: 1000,
+        response_format: { type: "json_object" }
+      });
+      
+      try {
+        // Try to parse the JSON response
+        return JSON.parse(completion.choices[0].message.content);
+      } catch (parseError) {
+        // If JSON parsing fails, try to extract title and content using regex
+        logger.warn(`JSON parsing failed for journal entry, attempting regex extraction: ${parseError}`);
+        
+        const content = completion.choices[0].message.content;
+        
+        // Try to match JSON-like structure with regex
+        const titleMatch = content.match(/"title"\s*:\s*"([^"]+)"/);
+        const contentMatch = content.match(/"content"\s*:\s*"([^"]*)"/);
+        
+        if (titleMatch && contentMatch) {
+          return {
+            title: titleMatch[1],
+            content: contentMatch[1].replace(/\\n/g, '\n')
+          };
+        }
+        
+        // If regex fails too, return a fallback entry
+        logger.error(`Failed to extract journal entry from response: ${content}`);
+        return {
+          title: "My Day So Far",
+          content: "Just writing a quick entry about my day. It's been pretty normal, but I wanted to get my thoughts down. Sometimes it helps to just write things out, you know? Anyway, I should get back to what I was doing. More later!"
+        };
+      }
+    } catch (error) {
+      logger.error(`Error generating contextual journal entry for guild ${guildId}:`, error);
+      
+      // Try fallback method without response_format if we got a specific error about response_format
+      if (error.message && error.message.includes("'response_format'")) {
+        try {
+          logger.info(`Attempting fallback method for journal entry generation for guild ${guildId}`);
+          return await generateFallbackJournalEntry(guildId);
+        } catch (fallbackError) {
+          logger.error(`Fallback journal generation also failed for guild ${guildId}:`, fallbackError);
+        }
+      }
+      
+      return null;
     }
-    
-    const recentEntriesText = recentEntries ? 
-      recentEntries.map(entry => 
-        `TITLE: ${entry.title}\nCONTENT: ${entry.content}\nDATE: ${new Date(entry.created_at).toLocaleDateString()}`
-      ).join('\n\n') : 
-      "No recent entries.";
-    
-    // Prepare the prompt with all context
-    const prompt = `
-Generate a journal entry written by Bri, a 14-year-old girl, on ${dateString} at ${timeString} (${timeOfDay}, ${specificContext}).
-
-CHARACTER SHEET:
-${JSON.stringify(sheet, null, 2)}
-
-ROUTINE:
-${JSON.stringify(routine, null, 2)}
-
-TIME CONTEXT:
-- Current date and time: ${dateString}, ${timeString}
-- Day of week: ${['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'][dayOfWeek]}
-- Is weekend: ${isWeekend}
-- Is school day: ${isSchoolDay}
-- Time of day: ${timeOfDay}
-- Specific context: ${specificContext}
-
-RECENT JOURNAL ENTRIES (for context only, don't repeat these topics directly):
-${recentEntriesText}
-
-Write a personal journal entry that:
-1. Is completely authentic to a 14-year-old girl's writing style
-2. Is appropriate for the current time, day, and context
-3. Reflects her character and routine
-4. Includes specific details about what she's doing, thinking, or feeling right now
-5. Is 2-4 paragraphs long
-6. Shows authentic emotions
-7. Occasionally references previously mentioned friends, family, hobbies, or events from her character sheet
-8. Is NOT repetitive of recent entries
-9. Feels spontaneous and genuine, as if actually written by a real teen in their journal
-
-Format your response as JSON:
-{
-  "title": "Journal title (creative and authentic to teen journal)",
-  "content": "The full journal entry text (2-4 paragraphs)"
 }
+
+  /**
+ * Fallback method for generating journal entries that doesn't rely on response_format
+ * @param {string} guildId - Guild ID
+ * @returns {Promise<Object>} - Generated entry with title and content
+ */
+async function generateFallbackJournalEntry(guildId) {
+  try {
+    // Simplified prompt
+    const prompt = `
+Write a journal entry by Bri, a 14-year-old girl. Make it authentic to teen writing style with 2-3 paragraphs.
+
+First, give me a creative title for the journal entry.
+Then, write the journal entry itself in 2-3 paragraphs.
+
+Format your response like this:
+TITLE: [your title here]
+
+[journal entry content here]
 `;
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo-16k",
+      model: "gpt-4o-mini", // This model doesn't support response_format
       messages: [
         { 
           role: "system", 
-          content: "You are a creative writer specialized in authentic teen journal writing. Generate journal entries that sound like they were truly written by a 14-year-old girl, with age-appropriate vocabulary, concerns, and style."
+          content: "You are a creative writer specialized in authentic teen journal writing."
         },
         { role: "user", content: prompt }
       ],
-      max_tokens: 1000,
-      response_format: { type: "json_object" }
+      max_tokens: 1000
+      // No response_format parameter
     });
     
-    return JSON.parse(completion.choices[0].message.content);
+    const content = completion.choices[0].message.content;
+    
+    // Extract title and content
+    const titleMatch = content.match(/TITLE:\s*(.+?)(?:\n|$)/);
+    const title = titleMatch ? titleMatch[1].trim() : "My Journal Entry";
+    
+    // Extract everything after the title as content
+    const contentStart = content.indexOf('\n\n');
+    const journalContent = contentStart > -1 ? 
+      content.substring(contentStart).trim() : 
+      content.replace(/TITLE:\s*.+?\n/, '').trim();
+    
+    return {
+      title: title,
+      content: journalContent
+    };
   } catch (error) {
-    logger.error(`Error generating contextual journal entry for guild ${guildId}:`, error);
-    return null;
+    logger.error(`Error in fallback journal generation for guild ${guildId}:`, error);
+    
+    // Ultimate fallback
+    return {
+      title: "Quick Thoughts",
+      content: "Just jotting down some quick thoughts today. Been busy with school and stuff. Nothing too exciting to report, but wanted to write something down. I'll write more later when I have more time!"
+    };
   }
 }
 
@@ -702,131 +802,216 @@ function isHoliday(date) {
  * @param {string} guildId - Guild ID
  */
 export async function scheduleRoutineJournalEntries(guildId) {
-  try {
-    // Get timezone for this guild (using first user's timezone as fallback)
-    let timezone = 'America/New_York'; // Default fallback
     try {
-      const { data: timezoneData } = await supabase
-        .from('user_timezones')
-        .select('timezone')
-        .eq('guild_id', guildId)
-        .limit(1)
-        .single();
-        
-      if (timezoneData && timezoneData.timezone) {
-        timezone = timezoneData.timezone;
+      // Get timezone for this guild (using first user's timezone as fallback)
+      let timezone = 'America/New_York'; // Default fallback
+      try {
+        const { data: timezoneData, error: tzError } = await supabase
+          .from('user_timezones')
+          .select('timezone')
+          .eq('guild_id', guildId)
+          .limit(1)
+          .single();
+          
+        if (!tzError && timezoneData && timezoneData.timezone) {
+          timezone = timezoneData.timezone;
+        } else if (tzError) {
+          logger.debug(`Using default timezone for scheduling. Error: ${tzError.message}`);
+        }
+      } catch (tzError) {
+        logger.debug(`Using default timezone for scheduling: ${tzError.message}`);
       }
-    } catch (tzError) {
-      logger.debug(`Using default timezone for scheduling: ${tzError.message}`);
+      
+      logger.info(`Setting up journal schedule for guild ${guildId} using timezone ${timezone}`);
+      
+      // Schedule morning entry (around 7 AM)
+      const morningHour = 7;
+      const morningMinute = Math.floor(Math.random() * 30); // 0-30 minutes past the hour
+      scheduleContextualEntry(morningHour, morningMinute, guildId, timezone);
+      
+      // Schedule lunch entry (around 11:30 AM - 12:30 PM)
+      const lunchHour = Math.random() < 0.5 ? 11 : 12;
+      const lunchMinute = lunchHour === 11 ? 30 + Math.floor(Math.random() * 30) : Math.floor(Math.random() * 30);
+      scheduleContextualEntry(lunchHour, lunchMinute, guildId, timezone);
+      
+      // Schedule evening entry (between 5 PM - 9 PM)
+      const eveningHour = Math.floor(Math.random() * 4) + 17; // 17-20 (5 PM - 8 PM)
+      const eveningMinute = Math.floor(Math.random() * 60); // 0-59 minutes
+      scheduleContextualEntry(eveningHour, eveningMinute, guildId, timezone);
+      
+      // Add a 30% chance for a random "bonus" entry at an unexpected time
+      if (Math.random() < 0.3) {
+        // Random hour between 1 PM and 4 PM, or between 9 PM and 10 PM
+        const randomHour = Math.random() < 0.7 ? 
+          Math.floor(Math.random() * 4) + 13 : // 1 PM - 4 PM
+          Math.floor(Math.random() * 2) + 21;  // 9 PM - 10 PM
+        const randomMinute = Math.floor(Math.random() * 60);
+        scheduleContextualEntry(randomHour, randomMinute, guildId, timezone);
+      }
+      
+      logger.info(`Scheduled routine journal entries for guild ${guildId} in timezone ${timezone}`);
+    } catch (error) {
+      logger.error(`Error scheduling routine journal entries for guild ${guildId}:`, error);
     }
-    
-    // Schedule morning entry (around 7 AM)
-    const morningHour = 7;
-    const morningMinute = Math.floor(Math.random() * 30); // 0-30 minutes past the hour
-    scheduleContextualEntry(morningHour, morningMinute, guildId, timezone);
-    
-    // Schedule lunch entry (around 11:30 AM - 12:30 PM)
-    const lunchHour = Math.random() < 0.5 ? 11 : 12;
-    const lunchMinute = lunchHour === 11 ? 30 + Math.floor(Math.random() * 30) : Math.floor(Math.random() * 30);
-    scheduleContextualEntry(lunchHour, lunchMinute, guildId, timezone);
-    
-    // Schedule evening entry (between 5 PM - 9 PM)
-    const eveningHour = Math.floor(Math.random() * 4) + 17; // 17-20 (5 PM - 8 PM)
-    const eveningMinute = Math.floor(Math.random() * 60); // 0-59 minutes
-    scheduleContextualEntry(eveningHour, eveningMinute, guildId, timezone);
-    
-    // Add a 30% chance for a random "bonus" entry at an unexpected time
-    if (Math.random() < 0.3) {
-      // Random hour between 1 PM and 4 PM, or between 9 PM and 10 PM
-      const randomHour = Math.random() < 0.7 ? 
-        Math.floor(Math.random() * 4) + 13 : // 1 PM - 4 PM
-        Math.floor(Math.random() * 2) + 21;  // 9 PM - 10 PM
-      const randomMinute = Math.floor(Math.random() * 60);
-      scheduleContextualEntry(randomHour, randomMinute, guildId, timezone);
-    }
-    
-    logger.info(`Scheduled routine journal entries for guild ${guildId} in timezone ${timezone}`);
-  } catch (error) {
-    logger.error(`Error scheduling routine journal entries for guild ${guildId}:`, error);
   }
-}
 
 /**
- * Schedules a contextual journal entry
+ * Schedules a contextual journal entry using improved timezone handling
  * @param {number} hour - Hour (0-23)
  * @param {number} minute - Minute (0-59)
  * @param {string} guildId - Guild ID
  * @param {string} timezone - Timezone
  */
 function scheduleContextualEntry(hour, minute, guildId, timezone = 'America/New_York') {
-  // Calculate the next occurrence of this time
-  const now = new Date();
-  const targetTime = new Date(now);
-  
-  // Convert target time to specified timezone
-  const targetInTz = new Date(targetTime.toLocaleString('en-US', { timeZone: timezone }));
-  
-  // Set the hour and minute
-  targetInTz.setHours(hour, minute, 0, 0);
-  
-  // If the time has already passed today, schedule for tomorrow
-  if (targetInTz <= now) {
-    targetInTz.setDate(targetInTz.getDate() + 1);
-  }
-  
-  // Convert back to UTC for scheduling
-  const targetUTC = new Date(targetInTz.toLocaleString('en-US', { timeZone: 'UTC' }));
-  const delay = targetUTC - now;
-  
-  // Schedule the entry creation
-  setTimeout(async () => {
     try {
-      // Import only what we need from journalSystem to avoid circular dependencies
-      const { postJournalEntry, storeJournalEntry, JOURNAL_ENTRY_TYPES } = await import('./journalSystem.js');
+      // Get current time in UTC
+      const now = new Date();
       
-      // Generate contextual entry
-      const entry = await generateContextualJournalEntry(guildId);
+      // Calculate target time in the specified timezone
+      // First, convert the current time to the target timezone
+      const options = { timeZone: timezone, hour12: false };
+      const formatter = new Intl.DateTimeFormat('en-US', {
+        ...options,
+        year: 'numeric',
+        month: 'numeric',
+        day: 'numeric',
+      });
+      const dateParts = formatter.formatToParts(now);
       
-      if (entry) {
-        // Post to Discord
-        const message = await postJournalEntry(entry.title, entry.content, guildId);
-        
-        // Store in database
-        const storedEntry = await storeJournalEntry({
-          entry_type: JOURNAL_ENTRY_TYPES.DAILY_THOUGHT,
-          title: entry.title,
-          content: entry.content,
-          related_id: null,
-          metadata: {
-            scheduled_hour: hour,
-            scheduled_minute: minute,
-            context: { 
-              hour: new Date().getHours(), 
-              is_weekend: [0, 6].includes(new Date().getDay()) 
-            }
-          },
-          guild_id: guildId
-        });
-        
-        // Process this entry to update character sheet
-        await updateCharacterSheetFromEntry(guildId, { 
-          title: entry.title, 
-          content: entry.content,
-          created_at: new Date().toISOString()
-        });
+      // Extract date parts
+      const dateObj = dateParts.reduce((acc, part) => {
+        if (part.type !== 'literal') {
+          acc[part.type] = parseInt(part.value, 10);
+        }
+        return acc;
+      }, {});
+      
+      // Create a date object with the target timezone's date
+      let targetDate = new Date(Date.UTC(
+        dateObj.year,
+        dateObj.month - 1, // JavaScript months are 0-indexed
+        dateObj.day,
+        hour,
+        minute,
+        0
+      ));
+      
+      // Convert to ms timestamp and adjust for timezone offset
+      const targetTimestamp = targetDate.getTime();
+      const tzOffset = getTimezoneOffset(timezone);
+      
+      // Calculate the delay until the target time
+      let delay = targetTimestamp - now.getTime() - tzOffset;
+      
+      // If the time has already passed today, add 24 hours
+      if (delay < 0) {
+        delay += 24 * 60 * 60 * 1000; // Add 24 hours
       }
       
-      // Reschedule for the next day
-      scheduleContextualEntry(hour, minute, guildId, timezone);
-    } catch (error) {
-      logger.error(`Error creating scheduled contextual entry for guild ${guildId}:`, error);
-      // Retry in 30 minutes
-      setTimeout(() => scheduleContextualEntry(hour, minute, guildId, timezone), 30 * 60 * 1000);
+      // Add a random variation (±2 minutes) to make it seem more natural
+      const variation = (Math.random() * 4 - 2) * 60 * 1000; // ±2 minutes in milliseconds
+      delay += variation;
+      
+      // Ensure delay is positive
+      if (delay < 1000) {
+        delay = 1000; // Minimum 1 second delay
+      }
+      
+      const scheduleTime = new Date(now.getTime() + delay);
+      logger.info(`Scheduled journal entry for guild ${guildId} at ${scheduleTime.toLocaleString()} (${timezone}, in ${Math.round(delay/60000)} minutes)`);
+      
+      // Schedule the entry creation
+      setTimeout(async () => {
+        try {
+          logger.info(`Executing scheduled journal entry for guild ${guildId} (${hour}:${minute})`);
+          
+          // Generate contextual entry
+          const entry = await generateContextualJournalEntry(guildId);
+          
+          if (!entry) {
+            logger.error(`Failed to generate contextual journal entry for guild ${guildId}`);
+            throw new Error('Entry generation failed');
+          }
+          
+          // Import only what we need from journalSystem.js
+          try {
+            const { postJournalEntry, storeJournalEntry, JOURNAL_ENTRY_TYPES } = await import('./journalSystem.js');
+            
+            // Post to Discord
+            logger.debug(`Posting journal entry "${entry.title}" to Discord for guild ${guildId}`);
+            const message = await postJournalEntry(entry.title, entry.content, guildId);
+            
+            // Store in database
+            logger.debug(`Storing journal entry "${entry.title}" in database for guild ${guildId}`);
+            const storedEntry = await storeJournalEntry({
+              entry_type: JOURNAL_ENTRY_TYPES.DAILY_THOUGHT,
+              title: entry.title,
+              content: entry.content,
+              related_id: null,
+              metadata: {
+                scheduled_hour: hour,
+                scheduled_minute: minute,
+                context: { 
+                  hour: new Date().getHours(), 
+                  is_weekend: [0, 6].includes(new Date().getDay()) 
+                }
+              },
+              guild_id: guildId
+            });
+            
+            // Process this entry to update character sheet
+            logger.debug(`Updating character sheet from entry "${entry.title}" for guild ${guildId}`);
+            await updateCharacterSheetFromEntry(guildId, { 
+              title: entry.title, 
+              content: entry.content,
+              created_at: new Date().toISOString()
+            });
+            
+            logger.info(`Successfully processed scheduled journal entry for guild ${guildId}`);
+          } catch (importError) {
+            logger.error(`Error importing or using journalSystem functions: ${importError}`);
+            throw importError;
+          }
+        } catch (error) {
+          logger.error(`Error creating scheduled contextual entry for guild ${guildId}: ${error.message}`);
+        } finally {
+          // Always reschedule, even if there was an error
+          try {
+            logger.info(`Rescheduling journal entry for guild ${guildId} for tomorrow`);
+            scheduleContextualEntry(hour, minute, guildId, timezone);
+          } catch (rescheduleError) {
+            logger.error(`Error rescheduling journal entry for guild ${guildId}: ${rescheduleError}`);
+            // Emergency fallback: try again after 12 hours
+            setTimeout(() => {
+              scheduleContextualEntry(hour, minute, guildId, timezone);
+            }, 12 * 60 * 60 * 1000);
+          }
+        }
+      }, delay);
+    } catch (scheduleError) {
+      logger.error(`Error setting up journal schedule for guild ${guildId}: ${scheduleError}`);
+      // Try again after 1 hour
+      setTimeout(() => {
+        scheduleContextualEntry(hour, minute, guildId, timezone);
+      }, 60 * 60 * 1000);
     }
-  }, delay);
-  
-  const scheduleTime = new Date(now.getTime() + delay);
-  logger.info(`Scheduled journal entry for guild ${guildId} at ${scheduleTime.toLocaleString()} (${timezone}, in ${Math.round(delay/60000)} minutes)`);
+}
+
+/**
+ * Helper function to get timezone offset in milliseconds
+ * @param {string} timezone - IANA timezone string (e.g., 'America/New_York')
+ * @returns {number} - Offset in milliseconds
+ */
+function getTimezoneOffset(timezone) {
+    try {
+      const now = new Date();
+      const utcDate = new Date(now.toLocaleString('en-US', { timeZone: 'UTC' }));
+      const tzDate = new Date(now.toLocaleString('en-US', { timeZone: timezone }));
+      return tzDate.getTime() - utcDate.getTime();
+    } catch (error) {
+      logger.error(`Error calculating timezone offset for ${timezone}: ${error}`);
+      return 0; // Default to no offset as fallback
+    }
 }
 
 /**
@@ -919,4 +1104,59 @@ export function schedulePendingInterestCheck(guildId) {
   } catch (error) {
     logger.error(`Error scheduling pending interest check for guild ${guildId}:`, error);
   }
+}
+
+/**
+ * Manual trigger function to immediately generate and post a journal entry
+ * Useful for testing or manual intervention
+ * @param {string} guildId - Guild ID
+ * @returns {Promise<boolean>} - Success status
+ */
+export async function manualTriggerJournalEntry(guildId) {
+    try {
+      logger.info(`Manually triggering journal entry for guild ${guildId}`);
+      
+      // Generate contextual entry
+      const entry = await generateContextualJournalEntry(guildId);
+      
+      if (!entry) {
+        logger.error(`Failed to generate contextual journal entry for guild ${guildId}`);
+        return false;
+      }
+      
+      // Import functions from journalSystem
+      const { postJournalEntry, storeJournalEntry, JOURNAL_ENTRY_TYPES } = await import('./journalSystem.js');
+      
+      // Post to Discord
+      const message = await postJournalEntry(entry.title, entry.content, guildId);
+      
+      // Store in database
+      const storedEntry = await storeJournalEntry({
+        entry_type: JOURNAL_ENTRY_TYPES.DAILY_THOUGHT,
+        title: entry.title,
+        content: entry.content,
+        related_id: null,
+        metadata: {
+          manual_trigger: true,
+          context: { 
+            hour: new Date().getHours(), 
+            is_weekend: [0, 6].includes(new Date().getDay()) 
+          }
+        },
+        guild_id: guildId
+      });
+      
+      // Process this entry to update character sheet
+      await updateCharacterSheetFromEntry(guildId, { 
+        title: entry.title, 
+        content: entry.content,
+        created_at: new Date().toISOString()
+      });
+      
+      logger.info(`Successfully triggered manual journal entry for guild ${guildId}`);
+      return true;
+    } catch (error) {
+      logger.error(`Error triggering manual journal entry for guild ${guildId}: ${error}`);
+      return false;
+    }
 }

@@ -812,7 +812,7 @@ Format your response as JSON:
  * @param {Array} storylines - Array of storyline titles to potentially reference
  * @returns {Promise<Object>} - Generated entry with title, content, and metadata
  */
-async function generateRandomJournalEntry(interests, storylines) {
+export async function generateRandomJournalEntry(interests, storylines) {
   try {
     // Randomly choose whether this is about today or plans for the future
     const isFuturePlan = Math.random() < 0.3; // 30% chance it's about future plans
@@ -822,8 +822,8 @@ async function generateRandomJournalEntry(interests, storylines) {
     const mood = moods[Math.floor(Math.random() * moods.length)];
     
     // Decide if we should reference existing interests or storylines
-    const shouldReferenceInterest = interests.length > 0 && Math.random() < 0.7;
-    const shouldReferenceStoryline = storylines.length > 0 && Math.random() < 0.5;
+    const shouldReferenceInterest = interests.length > 0 && Math.random() < 0.3;
+    const shouldReferenceStoryline = storylines.length > 0 && Math.random() < 0.3;
     
     // Random topics for when we don't reference interests or storylines
     const randomTopics = [
@@ -1087,7 +1087,7 @@ function scheduleRandomJournalEntries(guildId) {
   scheduleEntryAt(morningHour, morningMinute, guildId);
   
   // Second entry (70% chance): random time between 3 PM and 8 PM
-  if (Math.random() < 0.7) {
+  if (Math.random() < 0.99) {
     const eveningHour = Math.floor(Math.random() * 5) + 15; // 3-7 PM (15-19 in 24h)
     const eveningMinute = Math.floor(Math.random() * 60); // 0-59 minutes
     

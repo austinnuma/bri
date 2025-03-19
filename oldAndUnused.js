@@ -468,3 +468,54 @@ try {
 
 // Run database tests
 //await testDatabaseInDepth();
+
+
+/**
+ * Retrieves relevant memories for a query
+ * @param {string} userId - The user's ID
+ * @param {string} query - The query text
+ * @param {number} limit - Maximum number of memories to return
+ * @param {string} memoryType - Filter by memory type (optional)
+ * @param {string} category - Filter by category (optional)
+ * @param {string} guildId - The guild ID
+ * @returns {Promise<string>} - Relevant memories as text
+ */
+export async function retrieveRelevantMemories(userId, query, limit = 5, memoryType = null, category = null, guildId) {
+  try {
+    // Get embedding for query
+    const embedding = await getEmbedding(query);
+    
+    // Use the specialized function for vector search
+    const matches = await cachedVectorSearch(userId, embedding, {
+      threshold: 0.6,
+      limit,
+      memoryType,
+      category,
+      guildId
+    });
+    
+    if (!matches || matches.length === 0) {
+      return "";
+    }
+    
+    // Sort by confidence * distance to get most reliable and relevant memories first
+    const sortedData = [...matches].sort((a, b) => 
+      (b.confidence * b.distance) - (a.confidence * a.distance)
+    );
+    
+    // Format memories, adding confidence indicator for intuited memories
+    const formattedMemories = sortedData.map(memory => {
+      if (memory.memory_type === 'intuited' && memory.confidence < 0.9) {
+        // For lower confidence intuited memories, add an indicator
+        return `${memory.memory_text} (I think)`;
+      }
+      return memory.memory_text;
+    });
+    
+    return formattedMemories.join("\n");
+  } catch (error) {
+    // Make sure to capture and log the full error
+    logger.error("Error in retrieveRelevantMemories:", error, error.stack, { userId, guildId });
+    return "";
+  }
+}

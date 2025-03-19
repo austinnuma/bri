@@ -61,7 +61,7 @@ const INITIAL_INTERESTS = [
 
 // Table to track potential interests before they become actual interests
 const MENTION_THRESHOLD = 3;  // Number of mentions needed to become an interest
-const ENTHUSIASM_THRESHOLD = 0.8;  // Threshold for immediate interest adoption (0-1)
+const ENTHUSIASM_THRESHOLD = 0.92;  // Threshold for immediate interest adoption (0-1)
 
 
 // Initial storyline goals/events
