@@ -32,11 +32,6 @@ import {
   updateMemoryAccessStats,
   updateOverlappingMemoriesConfidence
 } from './enhancedMemoryRetrieval.js';
-import { 
-  getUserCharacterSheet, 
-  getCharacterSheetForPrompt, 
-  updateConversationStyle 
-} from './userCharacterSheet.js';
 
 
 // Initialize Supabase client using environment variables.
@@ -504,14 +499,8 @@ export async function getCombinedSystemPromptWithMemories(userId, basePrompt, qu
     allMemories = await retrieveMemoriesWithConfidence(userId, query, 6, null, null, guildId);
   }
   
-  // Combine the prompt with character sheet and memories
+  // Only append memories if there are any
   let combined = basePrompt;
-
-  // Add character sheet info if available
-  if (characterSheetInfo && characterSheetInfo.trim() !== "") {
-    combined += "\n\n" + characterSheetInfo;
-  }
-  // Add relevant memories if available
   if (allMemories && allMemories.trim() !== "") {
     combined += "\n\nRelevant Memories:\n" + allMemories;
   }

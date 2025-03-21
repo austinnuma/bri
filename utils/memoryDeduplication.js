@@ -35,10 +35,17 @@ export async function semanticDeduplication(userId, newMemories, guildId) {
         memory_text_snippet: newMemory.text.substring(0, 30),
         embedding_length: newMemory.embedding ? newMemory.embedding.length : 0
       });
+
+      if (newMemory.embedding) {
+        console.log(`Embedding type: ${typeof newMemory.embedding}`);
+        console.log(`Is array: ${Array.isArray(newMemory.embedding)}`);
+        console.log(`First few values: ${newMemory.embedding.slice(0, 5)}`);
+        console.log(`Embedding length: ${newMemory.embedding.length}`);
+      }
       
       // Log parameters before calling memory_similarity_check
-      console.log(`Calling memory_similarity_check RPC - userId: ${userId}, guildId: ${guildId}, threshold: 0.85, limit: 5`);
-      console.log(`Memory being checked: "${newMemory.text.substring(0, 50)}${newMemory.text.length > 50 ? '...' : ''}"`);
+      //console.log(`Calling memory_similarity_check RPC - userId: ${userId}, guildId: ${guildId}, threshold: 0.85, limit: 5`);
+      //console.log(`Memory being checked: "${newMemory.text.substring(0, 50)}${newMemory.text.length > 50 ? '...' : ''}"`);
       
       logger.info('Calling Supabase RPC memory_similarity_check', {
         user_id: userId,

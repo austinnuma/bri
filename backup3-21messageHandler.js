@@ -607,20 +607,6 @@ export async function handleLegacyMessage(message) {
     //}
   //}
 
-    // Collect the user's messages for style analysis
-    const userMessages = conversation
-    .filter(msg => msg.role === "user")
-    .map(msg => msg.content);
-
-    // Only update conversation style if we have a reasonable number of messages
-    if (userMessages.length >= 5) {
-    // Update the conversation style in the background (don't await)
-    updateConversationStyle(message.author.id, guildId, userMessages)
-      .catch(error => {
-        logger.error("Error updating conversation style:", error);
-      });
-    }
-
     // Memory extraction if memory feature is enabled
     if (memoryEnabled) {
       // Increment message counter for this user - now with guild context

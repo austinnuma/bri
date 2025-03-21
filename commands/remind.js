@@ -184,9 +184,13 @@ async function parseTimeWithAI(timeSpec, timezone) {
         // If that fails, use the AI parser
         const { openai } = await import('../services/combinedServices.js');
         
+        // Get current time in the user's timezone for better context
+        const now = new Date();
+        const userTimeNow = new Date(now.toLocaleString('en-US', { timeZone: timezone }));
+        
         const prompt = `
 Parse this time/date specification into a structured format.
-Current time: ${new Date().toISOString()}
+Current time: ${userTimeNow.toISOString()}
 User's timezone: ${timezone}
 
 Time specification: "${timeSpec}"
@@ -202,6 +206,7 @@ Return ONLY a JSON object with these fields:
   "second": 0     // Always 0
 }
 
+If it's a relative time like "in 10 minutes" or "in 3 hours", calculate the exact time.
 If you cannot parse the time reliably, set parsedOk to false.
 `;
 
@@ -224,21 +229,25 @@ If you cannot parse the time reliably, set parsedOk to false.
             return null;
         }
         
-        // Create a date object in the user's timezone
-        const date = new Date(
-            result.year, 
-            result.month - 1, // Month is 0-indexed in JS
-            result.day,
-            result.hour,
-            result.minute,
-            result.second
-        );
+        // Create date in correct format
+        // First create a date string in ISO format
+        const dateString = `${result.year}-${String(result.month).padStart(2, '0')}-${String(result.day).padStart(2, '0')}T${String(result.hour).padStart(2, '0')}:${String(result.minute).padStart(2, '0')}:00`;
         
-        // Convert from user timezone to UTC (which is what JS Date uses internally)
-        const userTime = new Date(date.toLocaleString('en-US', { timeZone: timezone }));
-        const utcTime = new Date(userTime.getTime() + (userTime.getTimezoneOffset() * 60000));
+        // Then create a date object specified as being in the user's timezone
+        const options = { timeZone: timezone };
+        const formatter = new Intl.DateTimeFormat('en-US', options);
         
-        return utcTime;
+        // Create the date object
+        const date = new Date(dateString);
+        
+        // Convert the date to UTC for storage
+        // Get the timezone offset in minutes
+        const tzOffset = new Date().getTimezoneOffset();
+        
+        // Create a date string that includes timezone info
+        const dateInTz = new Date(date.getTime() - (tzOffset * 60000));
+        
+        return dateInTz;
     } catch (error) {
         logger.error("Error parsing time with AI:", error);
         return null;

@@ -97,6 +97,11 @@ export async function initializeJournalSystem(client, channelId, guildId) {
     try {
       await initializeCharacterSheetSystem();
       logger.info("Character sheet system initialized");
+      
+      // If a specific guild ID was provided, schedule aging for that guild
+      if (guildId) {
+        scheduleCharacterSheetAging(guildId);
+      }
     } catch (characterSheetError) {
       logger.error("Error initializing character sheet system:", characterSheetError);
     }
@@ -1067,82 +1072,7 @@ export function getJournalSearchByGuildSQL() {
   `;
 }
 
-/**
- * Schedules random journal entries to be created periodically for a specific guild
- * @param {string} guildId - Guild ID
- */
-function scheduleRandomJournalEntries(guildId) {
-  // Make sure we have a valid guild ID
-  if (!guildId || guildId === 'legacy') {
-    logger.warn("Cannot schedule journal entries without a valid guild ID");
-    return;
-  }
 
-  // Create 1-2 random entries per day at random times
-  
-  // First entry: random time between 9 AM and 12 PM
-  const morningHour = Math.floor(Math.random() * 3) + 9; // 9-11 AM
-  const morningMinute = Math.floor(Math.random() * 60); // 0-59 minutes
-  
-  scheduleEntryAt(morningHour, morningMinute, guildId);
-  
-  // Second entry (70% chance): random time between 3 PM and 8 PM
-  if (Math.random() < 0.99) {
-    const eveningHour = Math.floor(Math.random() * 5) + 15; // 3-7 PM (15-19 in 24h)
-    const eveningMinute = Math.floor(Math.random() * 60); // 0-59 minutes
-    
-    scheduleEntryAt(eveningHour, eveningMinute, guildId);
-  }
-  
-  logger.info(`Scheduled random journal entries for guild ${guildId}`);
-}
-
-/**
- * Schedules a journal entry to be created at a specific time for a specific guild
- * @param {number} hour - Hour (0-23)
- * @param {number} minute - Minute (0-59)
- * @param {string} guildId - Guild ID
- */
-function scheduleEntryAt(hour, minute, guildId) {
-  // Validate guild ID
-  if (!guildId || guildId === 'legacy') {
-    logger.warn("Cannot schedule journal entry without a valid guild ID");
-    return;
-  }
-
-  // Calculate milliseconds until the scheduled time
-  const now = new Date();
-  const scheduledTime = new Date(
-    now.getFullYear(),
-    now.getMonth(),
-    now.getDate(),
-    hour,
-    minute
-  );
-  
-  // If the scheduled time has already passed today, schedule for tomorrow
-  if (scheduledTime <= now) {
-    scheduledTime.setDate(scheduledTime.getDate() + 1);
-  }
-  
-  const delay = scheduledTime - now;
-  
-  // Schedule the entry creation
-  setTimeout(async () => {
-    try {
-      await createRandomJournalEntry(guildId);
-      
-      // Reschedule for the next day
-      scheduleEntryAt(hour, minute, guildId);
-    } catch (error) {
-      logger.error(`Error creating scheduled journal entry for guild ${guildId}:`, error);
-      // Retry in 30 minutes
-      setTimeout(() => scheduleEntryAt(hour, minute, guildId), 30 * 60 * 1000);
-    }
-  }, delay);
-  
-  logger.info(`Scheduled journal entry for guild ${guildId} at ${scheduledTime.toLocaleTimeString()} (in ${Math.round(delay/60000)} minutes)`);
-}
 
 // Export the journal entry types and main functions
 export default {

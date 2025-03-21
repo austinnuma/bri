@@ -17,6 +17,10 @@ import { initializeTimeSystem, startTimeEventProcessing } from './utils/timeSyst
 import { initializeJournalSystem, createRandomJournalEntry } from './utils/journalSystem.js';
 import { migrateGlobalJournalChannel, migrateJournalChannels } from './utils/migrateJournalChannels.js';
 import { initializeCreditSystem } from './utils/creditManager.js';
+import { 
+  initializeUserCharacterSheetSystem, 
+  scheduleCharacterSheetUpdates 
+} from './utils/userCharacterSheet.js';
 
 
 // Initialize Discord client with the required intents
@@ -59,6 +63,18 @@ setupCacheMaintenance();
 ensureQuoteTableExists().catch(err => {
   logger.error("Error ensuring quote table exists:", err);
 });
+
+// Initialize user character sheet system
+try {
+  await initializeUserCharacterSheetSystem();
+  logger.info("User character sheet system initialized");
+  
+  // Schedule updates to run every 12 hours
+  scheduleCharacterSheetUpdates(12);
+  logger.info("User character sheet updates scheduled");
+} catch (error) {
+  logger.error("Error initializing user character sheet system:", error);
+}
 
 
 

@@ -137,7 +137,7 @@ export async function enhancedMemoryExtraction(userId, conversation, guildId, bo
     // Post-process to filter, normalize, and deduplicate
     // Make sure to pass the botName parameter here
     const filteredExtractions = postProcessExtractedFacts(allExtractions, botName);
-    const deduplicatedFacts = await deduplicateAgainstExisting(filteredExtractions, userId);
+    const deduplicatedFacts = await deduplicateAgainstExisting(filteredExtractions, userId, guildId);
     
     logger.info(`Extracted ${deduplicatedFacts.length} memories for user ${userId} in guild ${guildId}`);
     return deduplicatedFacts;

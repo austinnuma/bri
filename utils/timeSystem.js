@@ -745,14 +745,20 @@ export function parseTimeSpecification(dateText, timeText, timezone = DEFAULT_TI
       }
     } else if (lowerDateText.includes('in ')) {
       // Handle "in 3 days", "in 2 weeks", etc.
-      const match = lowerDateText.match(/in (\d+) (day|days|week|weeks|month|months)/);
+      const match = lowerDateText.match(/in (\d+) (minute|minutes|hour|hours|day|days|week|weeks|month|months)/);
       if (match) {
         const amount = parseInt(match[1]);
         const unit = match[2];
         
         targetDate = new Date(userNow);
         
-        if (unit === 'day' || unit === 'days') {
+        if (unit === 'minute' || unit === 'minutes') {
+          // Add minutes
+          targetDate.setMinutes(targetDate.getMinutes() + amount);
+        } else if (unit === 'hour' || unit === 'hours') {
+          // Add hours
+          targetDate.setHours(targetDate.getHours() + amount);
+        } else if (unit === 'day' || unit === 'days') {
           targetDate.setDate(targetDate.getDate() + amount);
         } else if (unit === 'week' || unit === 'weeks') {
           targetDate.setDate(targetDate.getDate() + (amount * 7));
