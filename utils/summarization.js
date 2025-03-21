@@ -63,7 +63,7 @@ ${conversationText}`;
     // Log warning if summary contains potential name confusion
     if (summary.toLowerCase().includes(`name is ${botName.toLowerCase()}`) || 
         (summary.toLowerCase().includes('name') && summary.toLowerCase().includes(botName.toLowerCase()))) {
-      logger.warn(`Potential bot name misidentification in summary: ${summary.substring(0, 100)}...`);
+      //logger.warn(`Potential bot name misidentification in summary: ${summary.substring(0, 100)}...`);
     }
     
     return summary;
@@ -135,7 +135,7 @@ ${combinedChunkSummary}`;
     // Log warning if summary contains potential name confusion
     if (summary.toLowerCase().includes(`name is ${botName.toLowerCase()}`) || 
         (summary.toLowerCase().includes('name') && summary.toLowerCase().includes(botName.toLowerCase()))) {
-      logger.warn(`Potential bot name misidentification in hierarchical summary: ${summary.substring(0, 100)}...`);
+      //logger.warn(`Potential bot name misidentification in hierarchical summary: ${summary.substring(0, 100)}...`);
     }
     
     return summary;

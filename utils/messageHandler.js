@@ -48,6 +48,15 @@ import {
   generateVerificationQuestion,
   processVerificationResponse 
 } from './memoryVerification.js';
+import { 
+  semanticDeduplication, 
+  updateLastExtractedMessage,
+  getLastExtractedMessage 
+} from './memoryDeduplication.js';
+import { 
+  incrementalMemoryExtraction, 
+  updateExtractionTracking 
+} from './incrementalMemoryExtraction.js';
 
 
 // No longer using in-memory Maps, using database functions instead
@@ -258,9 +267,6 @@ async function handleImageAttachments(message, cleanedContent, guildId) {
     return true; // Error, but still handled the images
   }
 }
-
-// The issue is that we're trying to update the conversation with Bri's response after the try/catch block,
-// but the 'reply' variable is only defined within the try block.
 
 // The handleLegacyMessage function should be restructured as follows:
 
@@ -596,7 +602,7 @@ export async function handleLegacyMessage(message) {
     }
   }
 
-    // Memory extraction if memory feature is enabled - still inside try block
+    // Memory extraction if memory feature is enabled
     if (memoryEnabled) {
       // Increment message counter for this user - now with guild context
       const userGuildCounterKey = `${message.author.id}:${guildId}`;
@@ -613,10 +619,10 @@ export async function handleLegacyMessage(message) {
         
         logger.info(`Triggering summarization for user ${message.author.id} in guild ${guildId} after ${userMessageCounters.get(userGuildCounterKey)} messages`);
         
-        // Run summarization and extraction asynchronously to avoid blocking response
-        summarizeAndExtract(message.author.id, conversation, guildId).catch(err => {
-          logger.error(`Error in summarization/extraction process: ${err}`);
-        });
+      // Use incremental extraction - no need to pass message ID anymore
+      summarizeAndExtract(message.author.id, conversation, guildId).catch(err => {
+        logger.error(`Error in memory extraction process: ${err}`);
+      });
         
         // Reset counter and update timestamp immediately
         userMessageCounters.set(userGuildCounterKey, 0);
@@ -673,123 +679,38 @@ async function updateUserMapping(message) {
  */
 async function summarizeAndExtract(userId, conversation, guildId) {
   try {
-    // Create a copy of the conversation to avoid modification during processing
-    const conversationCopy = [...conversation];
-    
-    // Summarize the conversation
-    const summary = await enhancedSummarizeConversation(conversationCopy);
-    if (!summary) {
-      logger.warn(`Failed to generate summary for user ${userId} in guild ${guildId}`);
+    // Skip if no conversation or too short
+    if (!conversation || conversation.length < 3) {
       return;
     }
     
     const serverConfig = await getServerConfig(guildId);
     const botName = serverConfig.botName || "Bri";
-    // Use the enhanced two-stage memory extraction - now passing guildId AND botName
-    const extractedFacts = await enhancedMemoryExtraction(userId, conversationCopy, guildId, botName);
     
-    // Also analyze the conversation for interests after summarization - with guild context
-    analyzeConversationForInterests(userId, conversation, guildId).catch(err => {
-      logger.error("Error analyzing summarized conversation for interests:", err);
-    });
-
-    // Skip DB operations if no new facts were extracted
-    if (extractedFacts.length === 0) {
-      logger.info(`No new facts extracted for user ${userId} in guild ${guildId}`);
-      return;
-    }
+    // Use the new incremental extraction system
+    const result = await incrementalMemoryExtraction(
+      userId, 
+      guildId, 
+      conversation,
+      botName
+    );
     
-    // Rest of the function remains unchanged
-    logger.info(`Extracted ${extractedFacts.length} new memories for user ${userId} in guild ${guildId}`);
-    
-    // Process all facts as a batch
-    const memoryObjects = extractedFacts.map(fact => ({
-      user_id: userId,
-      guild_id: guildId,
-      memory_text: fact,
-      memory_type: 'intuited',
-      category: categorizeMemory(fact),
-      confidence: 0.8,
-      source: 'conversation_extraction'
-    }));
-
-    // Get all embeddings in a single batch
-    const texts = extractedFacts;
-    const embeddings = await getBatchEmbeddings(texts);
-
-    // Add embeddings to memory objects
-    for (let i = 0; i < memoryObjects.length; i++) {
-      memoryObjects[i].embedding = embeddings[i];
-    }
-
-    // Deduplicate memories before insertion
-    const uniqueMemories = [];
-    const duplicateIndices = new Set();
-
-    // Check each memory against existing memories in the database
-    for (let i = 0; i < memoryObjects.length; i++) {
-      if (duplicateIndices.has(i)) continue; // Skip if already marked as duplicate
-      
-      const memory = memoryObjects[i];
-      const isDuplicate = await isDuplicateMemory(userId, memory.memory_text, guildId);
-      
-      if (!isDuplicate) {
-        uniqueMemories.push(memory);
-        
-        // Also check against other memories in this batch
-        for (let j = i + 1; j < memoryObjects.length; j++) {
-          if (duplicateIndices.has(j)) continue;
-          
-          const otherMemory = memoryObjects[j];
-          const similarity = natural.JaroWinklerDistance(
-            normalizeForComparison(memory.memory_text),
-            normalizeForComparison(otherMemory.memory_text)
-          );
-          
-          if (similarity > 0.92) {
-            duplicateIndices.add(j); // Mark as duplicate
-            logger.info(`Found duplicate in batch: "${memory.memory_text}" vs "${otherMemory.memory_text}"`);
-          }
-        }
+    if (result.success) {
+      if (result.extracted > 0) {
+        logger.info(`Successfully extracted ${result.extracted} new memories for user ${userId} in guild ${guildId}`);
       } else {
-        duplicateIndices.add(i);
-      }
-    }
-
-    logger.info(`Filtered out ${duplicateIndices.size} duplicate memories, inserting ${uniqueMemories.length} unique memories`);
-
-    // Insert only unique memories
-    if (uniqueMemories.length > 0) {
-      try {
-        // Use onConflict strategy
-        const { data, error } = await supabase
-          .from('unified_memories')
-          .insert(uniqueMemories, {
-            onConflict: 'user_id, guild_id, memory_text',
-            ignoreDuplicates: true
-          });
-          
-        if (error) {
-          logger.error("Error batch inserting memories:", error);
-          // Fall back to individual inserts if batch fails
-          for (const memory of uniqueMemories) {
-            await insertIntuitedMemory(userId, memory.memory_text, 0.8, guildId);
-          }
-        } else {
-          logger.info(`Successfully inserted ${uniqueMemories.length} unique memories for user ${userId} in guild ${guildId}`);
-        }
-      } catch (batchError) {
-        logger.error("Error in batch memory insertion:", batchError);
-        // Fall back to individual inserts
-        for (const memory of uniqueMemories) {
-          await insertIntuitedMemory(userId, memory.memory_text, 0.8, guildId);
-        }
+        logger.info(`No new memories found for user ${userId} in guild ${guildId}`);
       }
     } else {
-      logger.info(`No unique memories to insert for user ${userId} in guild ${guildId}`);
+      logger.error(`Error in memory extraction for user ${userId}: ${result.error}`);
     }
+    
+    // Also analyze the conversation for interests after extraction
+    analyzeConversationForInterests(userId, conversation, guildId).catch(err => {
+      logger.error("Error analyzing conversation for interests:", err);
+    });
   } catch (error) {
-    logger.error(`Error in background summarization process: ${error}`);
+    logger.error(`Error in summarization process: ${error}`);
   }
 }
 

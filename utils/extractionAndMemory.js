@@ -5,6 +5,7 @@ import { replaceEmoticons, stripCodeBlock, normalizeText } from './textUtils.js'
 import natural from 'natural';
 import { retrieveRelevantMemories } from './unifiedMemoryManager.js';
 import { enhancedSummarizeConversation } from './summarization.js';
+import { semanticDeduplication } from './memoryDeduplication.js';
 
 
 /**
@@ -293,38 +294,14 @@ USER MESSAGES: ${userMessages}`;
 
 
 /**
- * Deduplicates newly extracted facts against existing memory database.
- * Uses Jaro-Winkler distance for fuzzy matching to prevent near-duplicates.
- * 
+ * Uses semantic deduplication instead of string similarity
  * @param {Array<string>} newFacts - Newly extracted facts
- * @param {string} userId - User ID to fetch existing memories
+ * @param {string} userId - User ID
+ * @param {string} guildId - Guild ID
  * @returns {Promise<Array<string>>} - Deduplicated facts
  */
-async function deduplicateAgainstExisting(newFacts, userId) {
-  // Fetch existing memories (both explicit and intuited)
-  const existingMemories = await retrieveRelevantMemories(userId);
-  
-  if (!existingMemories || existingMemories.trim() === "") {
-    return newFacts; // No existing memories to deduplicate against
-  }
-  
-  // Convert existing memories to an array
-  const existingTexts = existingMemories.split('\n');
-  
-  // Filter out duplicates
-  const SIMILARITY_THRESHOLD = 0.85;
-  const uniqueFacts = newFacts.filter(newFact => {
-    // Check if this fact is too similar to any existing memory
-    return !existingTexts.some(existingText => {
-      const similarity = natural.JaroWinklerDistance(
-        normalizeForComparison(newFact),
-        normalizeForComparison(existingText)
-      );
-      return similarity > SIMILARITY_THRESHOLD;
-    });
-  });
-  
-  return uniqueFacts;
+async function deduplicateAgainstExisting(newFacts, userId, guildId) {
+  return await semanticDeduplication(userId, newFacts, guildId);
 }
 
 /**
