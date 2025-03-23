@@ -686,7 +686,7 @@ export async function generateContextualJournalEntry(guildId, currentTime = new 
   - Time of day: ${timeOfDay}
   - Specific context: ${specificContext}
   
-  RECENT JOURNAL ENTRIES (for context only, don't repeat these topics directly):
+  RECENT JOURNAL ENTRIES (IMPORTANT: for context only, don't repeat these topics directly or focus too much on the activities that already exist. create new events and activities for bri to engage in to prevent repetition):
   ${recentEntriesText}
   
   Write a personal journal entry that:

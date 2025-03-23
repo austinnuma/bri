@@ -18,6 +18,7 @@ const COMMON_TIMEZONES = [
   "Europe/Paris",           // Central Europe
   "Europe/Berlin",          // Germany
   "Europe/Moscow",          // Russia
+  "Asia/Bangkok",            // Thailand
   "Asia/Tokyo",             // Japan
   "Asia/Shanghai",          // China
   "Asia/Kolkata",           // India

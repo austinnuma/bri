@@ -459,160 +459,211 @@ export function scheduleMemoryMaintenance(intervalHours = 24) {
 
 
 /**
- * AI-based memory curation for a user
+ * AI-based memory curation for a user with improved merging logic
  * @param {string} userId - User ID
  * @returns {Promise<Object>} Results of the curation
  */
 export async function curateMemoriesWithAI(userId) {
-    try {
-      logger.info(`Starting AI-based memory curation for user ${userId}`);
-      
-      // Get all memories for this user (by category to avoid context limits)
-      const categories = Object.values(MemoryCategories);
-      let totalProcessed = 0;
-      let totalKept = 0;
-      let totalRemoved = 0;
-      let totalMerged = 0;
-      let reasons = []; // Create an array to store reasoning from each category
-      
-      // Process each category separately to avoid context limits
-      for (const category of categories) {
-        const { data: memories, error } = await supabase
-          .from('unified_memories')
-          .select('id, memory_text, confidence, category')
-          .eq('user_id', userId)
-          .eq('category', category)
-          
-        if (error || !memories || memories.length < 3) {
-          // Skip if error or not enough memories to curate
-          continue;
-        }
+  try {
+    logger.info(`Starting AI-based memory curation for user ${userId}`);
+    
+    // Get all memories for this user (by category to avoid context limits)
+    const categories = Object.values(MemoryCategories);
+    let totalProcessed = 0;
+    let totalKept = 0;
+    let totalRemoved = 0;
+    let totalMerged = 0;
+    let reasons = []; // Create an array to store reasoning from each category
+    
+    // Process each category separately to avoid context limits
+    for (const category of categories) {
+      const { data: memories, error } = await supabase
+        .from('unified_memories')
+        .select('id, memory_text, confidence, category, guild_id, embedding, last_accessed, access_count')
+        .eq('user_id', userId)
+        .eq('category', category);
         
-        totalProcessed += memories.length;
-        
-        // Create a prompt for the AI
-        const prompt = `
-  As a memory management expert, your task is to analyze and curate this list of memories about a user.
-  The goal is to keep only the most useful, accurate, and non-redundant memories.
-  
-  Current memories in the "${category}" category:
-  ${memories.map((mem, i) => `${i+1}. "${mem.memory_text}" (confidence: ${mem.confidence})`).join('\n')}
-  
-  Please analyze these memories and:
-  1. Identify duplicates or highly similar memories
-  2. Identify low-quality or uninformative memories
-  3. Identify memories that could be merged or combined
-  4. Keep only the most important, high-quality memories
-  
-  Return your analysis as a JSON object with these properties:
-  {
-    "keep": [1, 4, 7],  // Array of indices (1-based) of memories to keep as-is
-    "remove": [2, 3, 5], // Array of indices of memories to remove completely
-    "merge": [  // Array of merge operations
-      {
-        "indices": [6, 8, 9],  // Indices of memories to merge
-        "new_text": "Improved combined memory text"  // The merged memory text
+      if (error || !memories || memories.length < 3) {
+        // Skip if error or not enough memories to curate
+        continue;
       }
-    ],
-    "reasoning": "Brief explanation of your decisions"
-  }
-  `;
-  
-        const response = await openai.chat.completions.create({
-          model: "gpt-3.5-turbo", // Can use a cheaper model for this task
-          messages: [
-            { 
-              role: "system", 
-              content: "You are an expert system for memory management and curation. Your task is to analyze user memories and determine which to keep, remove, or merge." 
-            },
-            { role: "user", content: prompt }
-          ],
-          response_format: { type: "json_object" }
-        });
-        
-        // Parse the AI's response
-        const result = JSON.parse(response.choices[0].message.content);
       
-        // Store the reasoning in our array
-        if (result.reasoning) {
+      totalProcessed += memories.length;
+      
+      // Create a prompt for the AI
+      const prompt = `
+As a memory management expert, your task is to analyze and curate this list of memories about a user.
+The goal is to keep only the most useful, accurate, and non-redundant memories.
+
+Current memories in the "${category}" category:
+${memories.map((mem, i) => `${i+1}. "${mem.memory_text}" (confidence: ${mem.confidence})`).join('\n')}
+
+Please analyze these memories and:
+1. Identify duplicates or highly similar memories
+2. Identify low-quality or uninformative memories
+3. Identify memories that could be merged or combined
+4. Keep only the most important, high-quality memories
+
+Return your analysis as a JSON object with these properties:
+{
+  "keep": [1, 4, 7],  // Array of indices (1-based) of memories to keep as-is
+  "remove": [2, 3, 5], // Array of indices of memories to remove completely
+  "merge": [  // Array of merge operations
+    {
+      "indices": [6, 8, 9],  // Indices of memories to merge
+      "new_text": "Improved combined memory text"  // The merged memory text
+    }
+  ],
+  "reasoning": "Brief explanation of your decisions"
+}
+`;
+
+      const response = await openai.chat.completions.create({
+        model: "gpt-3.5-turbo", // Can use a cheaper model for this task
+        messages: [
+          { 
+            role: "system", 
+            content: "You are an expert system for memory management and curation. Your task is to analyze user memories and determine which to keep, remove, or merge." 
+          },
+          { role: "user", content: prompt }
+        ],
+        response_format: { type: "json_object" }
+      });
+      
+      // Parse the AI's response
+      const result = JSON.parse(response.choices[0].message.content);
+    
+      // Store the reasoning in our array
+      if (result.reasoning) {
         reasons.push(`${category}: ${result.reasoning}`);
-        }
-        
-        // Process the curation recommendations
-        
-        // 1. Handle memories to remove
-        const idsToRemove = result.remove.map(idx => memories[idx-1].id);
+      }
+      
+      // Process the curation recommendations
+      
+      // 1. Handle memories to remove
+      const idsToRemove = result.remove.map(idx => memories[idx-1].id);
+      if (idsToRemove.length > 0) {
         const { error: removeError } = await supabase
           .from('unified_memories')
           .delete()  // Actually delete instead of marking inactive
           .in('id', idsToRemove);
             
-          if (!removeError) {
-            totalRemoved += idsToRemove.length;
-            logger.info(`Removed ${idsToRemove.length} memories in category ${category}`);
-          }
-        
-        // 2. Handle memories to merge
-        if (result.merge && result.merge.length > 0) {
-          for (const merge of result.merge) {
-            // Get the highest confidence from merged memories
+        if (!removeError) {
+          totalRemoved += idsToRemove.length;
+          logger.info(`Removed ${idsToRemove.length} memories in category ${category}`);
+        } else {
+          logger.error(`Error removing memories: ${removeError.message}`);
+        }
+      }
+      
+      // 2. Handle memories to merge
+      if (result.merge && result.merge.length > 0) {
+        for (const merge of result.merge) {
+          try {
+            // Get the relevant memories to merge
             const mergedMemories = merge.indices.map(idx => memories[idx-1]);
+            
+            // Find the highest confidence from merged memories
             const highestConfidence = Math.max(...mergedMemories.map(m => m.confidence));
             
-            // Create the new merged memory
+            // Get the guild_id (should be the same for all, but take the first as default)
+            const guildId = mergedMemories[0].guild_id;
+            
+            // Calculate the most recent last_accessed time
+            const lastAccessed = mergedMemories.reduce((latest, memory) => {
+              if (!memory.last_accessed) return latest;
+              if (!latest) return memory.last_accessed;
+              return new Date(memory.last_accessed) > new Date(latest) ? memory.last_accessed : latest;
+            }, null);
+            
+            // Sum up all access_counts
+            const accessCount = mergedMemories.reduce((sum, memory) => sum + (memory.access_count || 0), 0);
+            
+            // Generate new embedding for the merged text
+            let newEmbedding = null;
+            try {
+              newEmbedding = await getEmbedding(merge.new_text);
+            } catch (embeddingError) {
+              logger.error(`Error generating embedding for merged memory: ${embeddingError.message}`);
+              // If we can't get a new embedding, use the embedding from the highest confidence memory
+              const highestConfidenceMemory = mergedMemories.reduce(
+                (highest, current) => current.confidence > highest.confidence ? current : highest, 
+                mergedMemories[0]
+              );
+              newEmbedding = highestConfidenceMemory.embedding;
+            }
+            
+            // Create the new merged memory with ALL required fields
+            const newMemoryData = {
+              user_id: userId,
+              guild_id: guildId, // Include guild_id
+              memory_text: merge.new_text,
+              memory_type: 'merged',
+              category: category,
+              confidence: highestConfidence,
+              source: 'ai_curation',
+              embedding: newEmbedding, // Include embedding
+              last_accessed: lastAccessed, // Include last_accessed (could be null)
+              access_count: accessCount // Include access_count
+            };
+            
+            // Insert the new memory
             const { data: newMemory, error: createError } = await supabase
               .from('unified_memories')
-              .insert({
-                user_id: userId,
-                memory_text: merge.new_text,
-                memory_type: 'merged',
-                category: category,
-                confidence: highestConfidence,
-                source: 'ai_curation'
-              })
+              .insert(newMemoryData)
               .select()
               .single();
               
             if (!createError && newMemory) {
               // Deactivate the original memories
               const idsToDeactivate = merge.indices.map(idx => memories[idx-1].id);
-              await supabase
+              const { error: updateError } = await supabase
                 .from('unified_memories')
                 .update({ active: false })
                 .in('id', idsToDeactivate);
                 
-              totalMerged += idsToDeactivate.length;
+              if (!updateError) {
+                totalMerged += idsToDeactivate.length;
+                logger.info(`Created merged memory from ${idsToDeactivate.length} memories in category ${category}`);
+              } else {
+                logger.error(`Error deactivating original memories: ${updateError.message}`);
+              }
+            } else {
+              logger.error(`Error creating merged memory: ${createError?.message || "Unknown error"}`);
             }
+          } catch (mergeError) {
+            logger.error(`Error during memory merge: ${mergeError.message}`);
           }
         }
-        
-        // Calculate kept memories
-        if (result.keep && result.keep.length > 0) {
-          totalKept += result.keep.length;
-        }
-        
-        logger.info(`AI curation for category ${category}: processed ${memories.length}, kept ${result.keep?.length || 0}, removed ${result.remove?.length || 0}, merged ${result.merge?.length || 0} groups`);
       }
       
+      // Calculate kept memories
+      if (result.keep && result.keep.length > 0) {
+        totalKept += result.keep.length;
+      }
+      
+      logger.info(`AI curation for category ${category}: processed ${memories.length}, kept ${result.keep?.length || 0}, removed ${result.remove?.length || 0}, merged ${result.merge?.length || 0} groups`);
+    }
+    
     // Now return with the combined reasoning outside the loop
     return {
-        processed: totalProcessed,
-        kept: totalKept,
-        removed: totalRemoved,
-        merged: totalMerged,
-        reasoning: reasons.join(' | ') // Join all reasoning strings
-      };
-    } catch (error) {
-      logger.error(`Error in AI memory curation for user ${userId}:`, error);
-      return {
-        processed: 0,
-        kept: 0,
-        removed: 0,
-        merged: 0,
-        error: error.message
-      };
-    }
+      processed: totalProcessed,
+      kept: totalKept,
+      removed: totalRemoved,
+      merged: totalMerged,
+      reasoning: reasons.join(' | ') // Join all reasoning strings
+    };
+  } catch (error) {
+    logger.error(`Error in AI memory curation for user ${userId}:`, error);
+    return {
+      processed: 0,
+      kept: 0,
+      removed: 0,
+      merged: 0,
+      error: error.message
+    };
   }
+}
 
   // Make this less frequent than normal maintenance
   export async function runAIMemoryCuration() {
