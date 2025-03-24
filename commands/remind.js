@@ -1,7 +1,9 @@
 // commands/remind.js
 import { SlashCommandBuilder, EmbedBuilder } from 'discord.js';
 import { logger } from '../utils/logger.js';
-import { createEvent, getUserTimezone, parseTimeSpecification, EVENT_TYPES, REMINDER_TIMES } from '../utils/timeSystem.js';
+import { createEvent, getUserTimezone, EVENT_TYPES, REMINDER_TIMES } from '../utils/timeSystem.js';
+// Import our improved time parser
+import { parseTimeSpecification } from '../utils/timeParser.js';
 
 // Import credit management functions
 import { hasEnoughCredits, useCredits, CREDIT_COSTS, getServerCredits } from '../utils/creditManager.js';
@@ -96,35 +98,45 @@ export async function execute(interaction) {
         // Get the user's timezone
         const timezone = await getUserTimezone(interaction.user.id);
         
-        // Parse the time specification
-        const parsedDate = await parseTimeWithAI(when, timezone);
+        // Try enhanced parser directly before falling back to AI
+        const now = new Date(); // Current reference date
+        const parsedDate = parseTimeSpecification(when, '', timezone, now);
         
-        if (!parsedDate) {
-            return interaction.editReply("Sorry, I couldn't understand when you want to be reminded. Please try using a clearer time format like 'tomorrow at 3pm' or 'March 15 at 14:00'.");
+        // If enhanced parser doesn't resolve a valid date, use AI method as fallback
+        if (!parsedDate || isNaN(parsedDate.getTime())) {
+            // Fallback to AI parsing
+            const aiParsedDate = await parseTimeWithAI(when, timezone);
+            
+            if (!aiParsedDate) {
+                return interaction.editReply("Sorry, I couldn't understand when you want to be reminded. Please try using a clearer time format like 'tomorrow at 3pm' or 'March 15 at 14:00'.");
+            }
+            
+            // Use the AI-parsed date
+            const reminderMinutes = getReminderMinutes(reminderTime);
+            
+            // Create the reminder event
+            const event = await createEvent({
+                user_id: interaction.user.id,
+                event_type: EVENT_TYPES.REMINDER,
+                title: what,
+                description: `Reminder set by ${interaction.user.tag} on ${new Date().toLocaleDateString()}`,
+                event_date: aiParsedDate.toISOString(),
+                reminder_minutes: reminderMinutes,
+                channel_id: interaction.channelId,
+                guild_id: interaction.guildId
+            });
+            
+            if (!event) {
+                return interaction.editReply("Sorry, I couldn't create that reminder. Please try again.");
+            }
+            
+            // Handle credits and format response
+            handleCreditsAndRespond(interaction, creditsEnabled, hasUnlimitedReminders, guildId, what, aiParsedDate, timezone);
+            return;
         }
         
-        // Calculate reminder minutes based on selection
-        let reminderMinutes = [];
-        
-        switch (reminderTime) {
-            case 'exact':
-                reminderMinutes = [0]; // At the exact time
-                break;
-            case '5min':
-                reminderMinutes = [5]; // 5 minutes before
-                break;
-            case '30min':
-                reminderMinutes = [30]; // 30 minutes before
-                break;
-            case '1hour':
-                reminderMinutes = [60]; // 1 hour before
-                break;
-            case '1day':
-                reminderMinutes = [1440]; // 1 day before
-                break;
-            default:
-                reminderMinutes = [0]; // Default to exact time
-        }
+        // If we got here, the enhanced parser worked
+        const reminderMinutes = getReminderMinutes(reminderTime);
         
         // Create the reminder event
         const event = await createEvent({
@@ -134,37 +146,68 @@ export async function execute(interaction) {
             description: `Reminder set by ${interaction.user.tag} on ${new Date().toLocaleDateString()}`,
             event_date: parsedDate.toISOString(),
             reminder_minutes: reminderMinutes,
-            channel_id: interaction.channelId, // Store the channel where the reminder was set
-            guild_id: interaction.guildId // Store the guild where the reminder was set
+            channel_id: interaction.channelId,
+            guild_id: interaction.guildId
         });
         
         if (!event) {
             return interaction.editReply("Sorry, I couldn't create that reminder. Please try again.");
         }
         
-        // If credits are enabled and user doesn't have unlimited reminders, use credits
-        if (creditsEnabled && !hasUnlimitedReminders) {
-            await useCredits(guildId, 'REMINDER_CREATION');
-            logger.info(`Used ${CREDIT_COSTS['REMINDER_CREATION']} credits for reminder creation in server ${guildId}`);
-        } else if (hasUnlimitedReminders) {
-            logger.info(`Created reminder in server ${guildId} with Premium subscription (no credits used)`);
-        }
+        // Handle credits and respond
+        handleCreditsAndRespond(interaction, creditsEnabled, hasUnlimitedReminders, guildId, what, parsedDate, timezone);
         
-        // Format the reminder time in the user's timezone
-        const formattedTime = parsedDate.toLocaleString('en-US', { 
-            timeZone: timezone,
-            dateStyle: 'full',
-            timeStyle: 'short'
-        });
-        
-        // Respond with confirmation
-        return interaction.editReply({
-            content: `✅ I'll remind you about **${what}** on **${formattedTime}**!`
-        });
     } catch (error) {
         logger.error('Error in remind command:', error);
         return interaction.editReply("Sorry, something went wrong setting your reminder. Please try again with a clearer time description.");
     }
+}
+
+/**
+ * Helper function to get reminder minutes based on selection
+ * @param {string} reminderTime - Selected reminder time
+ * @returns {Array<number>} - Array of reminder minutes
+ */
+function getReminderMinutes(reminderTime) {
+    switch (reminderTime) {
+        case 'exact':
+            return [0]; // At the exact time
+        case '5min':
+            return [5]; // 5 minutes before
+        case '30min':
+            return [30]; // 30 minutes before
+        case '1hour':
+            return [60]; // 1 hour before
+        case '1day':
+            return [1440]; // 1 day before
+        default:
+            return [0]; // Default to exact time
+    }
+}
+
+/**
+ * Helper function to handle credits and respond to the user
+ */
+async function handleCreditsAndRespond(interaction, creditsEnabled, hasUnlimitedReminders, guildId, what, parsedDate, timezone) {
+    // If credits are enabled and user doesn't have unlimited reminders, use credits
+    if (creditsEnabled && !hasUnlimitedReminders) {
+        await useCredits(guildId, 'REMINDER_CREATION');
+        logger.info(`Used ${CREDIT_COSTS['REMINDER_CREATION']} credits for reminder creation in server ${guildId}`);
+    } else if (hasUnlimitedReminders) {
+        logger.info(`Created reminder in server ${guildId} with Premium subscription (no credits used)`);
+    }
+    
+    // Format the reminder time in the user's timezone
+    const formattedTime = parsedDate.toLocaleString('en-US', { 
+        timeZone: timezone,
+        dateStyle: 'full',
+        timeStyle: 'short'
+    });
+    
+    // Respond with confirmation
+    return interaction.editReply({
+        content: `✅ I'll remind you about **${what}** on **${formattedTime}**!`
+    });
 }
 
 /**
@@ -175,13 +218,7 @@ export async function execute(interaction) {
  */
 async function parseTimeWithAI(timeSpec, timezone) {
     try {
-        // First try the built-in parser
-        const directParsed = parseTimeSpecification(timeSpec, '', timezone);
-        if (directParsed && !isNaN(directParsed.getTime())) {
-            return directParsed;
-        }
-        
-        // If that fails, use the AI parser
+        // Import openai
         const { openai } = await import('../services/combinedServices.js');
         
         // Get current time in the user's timezone for better context

@@ -33,7 +33,6 @@ import {
   personalizeResponse,
   detectAndStoreInsideJoke
 } from './characterDevelopment.js';
-import { extractTimeAndEvent, createEvent, EVENT_TYPES, REMINDER_TIMES, getUserTimezone } from './timeSystem.js';
 import { getEmbedding } from './improvedEmbeddings.js';
 import natural from 'natural';
 import { getServerConfig, getServerPrefix, isFeatureEnabled } from './serverConfigManager.js';
@@ -62,6 +61,17 @@ import {
   getCharacterSheetForPrompt, 
   updateConversationStyle 
 } from './userCharacterSheet.js';
+import {
+  createEvent, 
+  EVENT_TYPES, 
+  REMINDER_TIMES, 
+  getUserTimezone,
+  storeContextEventWithInstructions 
+} from './timeSystem.js';
+import { 
+  extractTimeAndEvent, 
+  parseTimeSpecification 
+} from './timeParser.js';
 
 
 // No longer using in-memory Maps, using database functions instead
@@ -734,7 +744,15 @@ async function summarizeAndExtract(userId, conversation, guildId) {
 }
 
 /**
- * Checks message content for time-related information and creates follow-up events
+ * Enhanced function to check message content for time-related information
+ * @param {string} content - Message content
+ * @param {string} userId - User ID
+ * @param {string} channelId - Channel ID
+ * @param {string} guildId - Guild ID
+ * @returns {Promise<Object|null>} - Time-related context info or null
+ */
+/**
+ * Enhanced function to check message content for time-related information
  * @param {string} content - Message content
  * @param {string} userId - User ID
  * @param {string} channelId - Channel ID
@@ -746,27 +764,36 @@ async function checkForTimeRelatedContent(content, userId, channelId, guildId) {
     // Don't process very short messages
     if (content.length < 10) return null;
     
-    // Extract time and event information
-    const eventInfo = await extractTimeAndEvent(content);
+    // Extract time and event information with userId for context awareness
+    const eventInfo = await extractTimeAndEvent(content, userId, `msg-${Date.now()}`);
     
     // If no time info, exit early
     if (!eventInfo) return null;
     
+    logger.info(`Extracted time event for user ${userId} in guild ${guildId}: ${JSON.stringify(eventInfo)}`);
+    
     // Get the user's timezone
     const timezone = await getUserTimezone(userId, guildId);
     
-    // Check if this is a significant event that we should offer to remember
+    // Store this as a context event with conversation instructions
+    const contextEvent = await storeContextEventWithInstructions(
+      userId, 
+      guildId, 
+      eventInfo, 
+      content
+    );
+    
+    if (!contextEvent) {
+      logger.error(`Failed to store context event for user ${userId} in guild ${guildId}`);
+    }
+    
+    // Check if this is a significant event that we should offer to remember with formal reminders
     const isSignificantEvent = isEventSignificant(eventInfo);
     
-    if (!isSignificantEvent) return null;
-    
-    // Generate a custom follow-up question based on the event type
-    const followUpQuestion = generateFollowUpQuestion(eventInfo);
-    
-    // For very clear, important events, automatically create a follow-up reminder
-    if (eventInfo.type === 'appointment' || 
-        eventInfo.type === 'interview' || 
-        eventInfo.title?.toLowerCase().includes('interview')) {
+    // For significant events, create follow-up reminders
+    if (isSignificantEvent) {
+      // Generate a custom follow-up question based on the event type
+      const followUpQuestion = generateFollowUpQuestion(eventInfo);
       
       // Create a follow-up event
       await createFollowUpEvent(userId, eventInfo, channelId, guildId);
@@ -774,7 +801,7 @@ async function checkForTimeRelatedContent(content, userId, channelId, guildId) {
       // Create a reminder for the actual event
       await createReminderForEvent(userId, eventInfo, channelId, guildId);
       
-      // Return a flag indicating we've handled this automatically
+      // Return a flag indicating we've handled this formally
       return {
         eventFound: true,
         eventType: eventInfo.type,
@@ -783,12 +810,11 @@ async function checkForTimeRelatedContent(content, userId, channelId, guildId) {
       };
     }
     
-    // For other events, just indicate we found something time-related
+    // For non-significant events, we still want to note them but not formally remind
     return {
       eventFound: true,
       eventType: eventInfo.type,
-      shouldAsk: true,
-      followUpQuestion
+      shouldAsk: false // Don't add follow-up to response for casual events
     };
   } catch (error) {
     logger.error("Error checking for time-related content:", error);
@@ -797,15 +823,15 @@ async function checkForTimeRelatedContent(content, userId, channelId, guildId) {
 }
 
 /**
- * Determines if an event is significant enough to remember
+ * Determines if an event is significant enough for formal reminders
  * @param {Object} eventInfo - Event information
  * @returns {boolean} - Whether the event is significant
  */
 function isEventSignificant(eventInfo) {
-  // Consider significant if it has a specific date/time
+  // Consider significant if it has a specific date/time and is a formal event type
   if (!eventInfo.date) return false;
   
-  // Check the event type
+  // Check the event type - KEEP THE ORIGINAL LIST AS REQUESTED
   const significantTypes = ['appointment', 'interview', 'meeting', 'deadline', 'exam', 'test'];
   if (significantTypes.includes(eventInfo.type)) return true;
   

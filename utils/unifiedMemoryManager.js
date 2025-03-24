@@ -37,6 +37,7 @@ import {
   getCharacterSheetForPrompt, 
   updateConversationStyle 
 } from './userCharacterSheet.js';
+import { getTimeEventsForContextEnhancement } from './timeSystem.js';
 
 
 // Initialize Supabase client using environment variables.
@@ -494,6 +495,7 @@ export async function retrieveRelevantMemories(userId, query, limit = 5, memoryT
 export async function getCombinedSystemPromptWithMemories(userId, basePrompt, query, guildId, conversation = null) {
   // First get the user character sheet formatted for the prompt
   const characterSheetInfo = await getCharacterSheetForPrompt(userId, guildId);
+  
   // If conversation context is provided, use context-aware retrieval
   let allMemories;
   
@@ -504,6 +506,9 @@ export async function getCombinedSystemPromptWithMemories(userId, basePrompt, qu
     allMemories = await retrieveMemoriesWithConfidence(userId, query, 6, null, null, guildId);
   }
   
+  // Get time-related events for context enhancement
+  const timeContext = await getTimeEventsForContextEnhancement(userId, guildId);
+  
   // Combine the prompt with character sheet and memories
   let combined = basePrompt;
 
@@ -511,9 +516,16 @@ export async function getCombinedSystemPromptWithMemories(userId, basePrompt, qu
   if (characterSheetInfo && characterSheetInfo.trim() !== "") {
     combined += "\n\n" + characterSheetInfo;
   }
+  
   // Add relevant memories if available
   if (allMemories && allMemories.trim() !== "") {
     combined += "\n\nRelevant Memories:\n" + allMemories;
+  }
+  
+  // Add time context if available
+  if (timeContext && timeContext.trim() !== "") {
+    combined += "\n\nTime-Related Context:\n" + timeContext;
+    combined += "\n\nIf relevant and natural in conversation, you can reference these upcoming events. Don't force mentioning them if it wouldn't flow naturally in the conversation.";
   }
   
   return combined;

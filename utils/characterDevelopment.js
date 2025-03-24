@@ -1538,8 +1538,14 @@ export async function personalizeResponse(userId, baseResponse, guildId) {
       return baseResponse;
     }
     
-    // Apply personalizations
-    return await applyPersonalizations(baseResponse, personalizations, relationship.level);
+    // Apply personalizations - pass userId and guildId to the updated function
+    return await applyPersonalizations(
+      baseResponse, 
+      personalizations, 
+      relationship.level,
+      userId,
+      guildId
+    );
   } catch (error) {
     logger.error("Error in personalizeResponse:", error);
     return baseResponse;
@@ -1548,13 +1554,15 @@ export async function personalizeResponse(userId, baseResponse, guildId) {
 
 
 /**
- * Applies personalizations to a response
+ * Applies personalizations to a response with user's name included
  * @param {string} baseResponse - The original response
  * @param {Array} personalizations - The personalizations to apply
  * @param {number} relationshipLevel - The relationship level
+ * @param {string} userId - The user's ID
+ * @param {string} guildId - The guild ID
  * @returns {Promise<string>} - Personalized response
  */
-async function applyPersonalizations(baseResponse, personalizations, relationshipLevel) {
+async function applyPersonalizations(baseResponse, personalizations, relationshipLevel, userId, guildId) {
   try {
     // Prepare personalization instructions
     const personalizationInstructions = personalizations.map(p => {
@@ -1576,6 +1584,83 @@ async function applyPersonalizations(baseResponse, personalizations, relationshi
       return baseResponse;
     }
     
+    // Get user's name information from character sheet
+    let userName = null;
+    let userNickname = null;
+    
+    try {
+      // Import the getUserCharacterSheet function if not already available
+      const { getUserCharacterSheet } = await import('./userCharacterSheet.js');
+      
+      // Get the user's character sheet
+      const characterSheet = await getUserCharacterSheet(userId, guildId);
+      
+      // Extract name and nickname if available
+      if (characterSheet) {
+        userName = characterSheet.name;
+        userNickname = characterSheet.nickname;
+      }
+    } catch (sheetError) {
+      logger.warn(`Error getting user character sheet for personalization: ${sheetError}`);
+    }
+    
+    // If character sheet didn't have name info, try to get from discord_users table
+    if (!userName && !userNickname) {
+      try {
+        const { data: userData, error } = await supabase
+          .from('discord_users')
+          .select('username, nickname')
+          .eq('user_id', userId)
+          .eq('server_id', guildId)
+          .single();
+          
+        if (!error && userData) {
+          // Default to nickname if available, otherwise username
+          userNickname = userData.nickname || userData.username;
+        }
+      } catch (userError) {
+        logger.warn(`Error getting user Discord info for personalization: ${userError}`);
+      }
+    }
+    
+    // Try to get from intuited memories as a last resort
+    if (!userName && !userNickname) {
+      try {
+        const { data: memories, error } = await supabase
+          .from('intuited_memories')
+          .select('memory_text')
+          .eq('user_id', userId)
+          .eq('guild_id', guildId)
+          .ilike('memory_text', '%name is%')
+          .limit(5);
+          
+        if (!error && memories && memories.length > 0) {
+          // Try to extract name from memory text
+          for (const memory of memories) {
+            const nameMatch = memory.memory_text.match(/name is\s+([A-Za-z]+)/i);
+            if (nameMatch && nameMatch[1]) {
+              userName = nameMatch[1];
+              break;
+            }
+          }
+        }
+      } catch (memoryError) {
+        logger.warn(`Error getting name from intuited memories: ${memoryError}`);
+      }
+    }
+    
+    // User name information for the prompt
+    let userNameInfo = "";
+    if (userName) {
+      userNameInfo = `The user's name is ${userName}`;
+      if (userNickname && userNickname !== userName) {
+        userNameInfo += ` and they go by ${userNickname}`;
+      }
+      userNameInfo += `. Always use their name or nickname when appropriate instead of their Discord username.`;
+    } else if (userNickname) {
+      userNameInfo = `The user's name is ${userNickname}. Always use their name when appropriate instead of their Discord username.`;
+    }
+    
     // Use OpenAI to apply the personalizations
     const prompt = `
 You need to personalize this message for someone I've been chatting with regularly.
@@ -1585,6 +1670,8 @@ Original message: "${baseResponse}"
 Please apply these personalizations naturally (don't make it obvious you're adding them):
 ${personalizationInstructions.join('\n')}
 
+${userNameInfo}
+
 The relationship level is ${relationshipLevel}/4 (higher = closer friend).
 
 Important guidelines:
@@ -1593,6 +1680,7 @@ Important guidelines:
 - Don't make the personalizations feel forced or artificial
 - Don't explicitly state "since we're friends" or similar phrases
 - Keep approximately the same length as the original
+- If you use the person's name, use their real name/nickname as provided, not their Discord username
 `;
 
     const completion = await openai.chat.completions.create({

@@ -265,9 +265,12 @@ try {
   await initializeTimeSystem(client);
   logger.info("Time system initialized");
   
-  // Start the time event processing (checking every 1 minute)
-  startTimeEventProcessing(client, 1);
-  logger.info("Time event processing started");
+  // Import the enhanced version
+  const { startTimeEventProcessing, processTimeAwareEventsEnhanced } = await import('./utils/timeSystem.js');
+  
+  // Start the time event processing using the enhanced version directly
+  startTimeEventProcessing(client, 1, processTimeAwareEventsEnhanced);
+  logger.info("Enhanced time event processing started");
 } catch (error) {
   logger.error("Error initializing time system:", error);
 }

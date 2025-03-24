@@ -651,6 +651,7 @@ Look for:
 2. Relative timeframes ("tomorrow", "next week", "in 3 days")
 3. Event types (meeting, appointment, birthday, reminder, etc.)
 4. Event details (title, description, location)
+5. If no specific date is mentioned but a time is, assume it's today. If the time mentioned has already passed, assume it's tomorrow.
 
 Format your response as JSON:
 {
@@ -1172,24 +1173,27 @@ let timeEventInterval = null;
 
 /**
  * Start the time-aware event processing
+ * @param {Object} client - Discord client
  * @param {number} intervalMinutes - Check interval in minutes
+ * @param {Function} processingFunction - Function to call (defaults to regular processTimeAwareEvents)
  */
-export function startTimeEventProcessing(client, intervalMinutes = 1) {
-    if (client) {
-        discordClientRef = client;
-        logger.info("Discord client reference stored in timeSystem");
-      }
-    // Stop any existing interval
-    if (timeEventInterval) {
-        clearInterval(timeEventInterval);
-    }
+export function startTimeEventProcessing(client, intervalMinutes = 1, processingFunction = processTimeAwareEvents) {
+  if (client) {
+    discordClientRef = client;
+    logger.info("Discord client reference stored in timeSystem");
+  }
+  
+  // Stop any existing interval
+  if (timeEventInterval) {
+    clearInterval(timeEventInterval);
+  }
   
   // Convert minutes to milliseconds
   const intervalMs = intervalMinutes * 60 * 1000;
   
-  // Set up interval
+  // Set up interval with the provided processing function
   timeEventInterval = setInterval(() => {
-    processTimeAwareEvents().catch(error => {
+    processingFunction().catch(error => {
       logger.error("Error in time event processing interval:", error);
     });
   }, intervalMs);
@@ -1197,7 +1201,7 @@ export function startTimeEventProcessing(client, intervalMinutes = 1) {
   logger.info(`Started time event processing with ${intervalMinutes} minute interval`);
   
   // Run once immediately
-  processTimeAwareEvents().catch(error => {
+  processingFunction().catch(error => {
     logger.error("Error in initial time event processing:", error);
   });
 }
@@ -1283,3 +1287,488 @@ export async function getActiveScheduledMessages(guildId = null) {
       return [];
     }
   }
+
+  /**
+ * Gets upcoming time events for context enhancement
+ * @param {string} userId - User ID
+ * @param {string} guildId - Guild ID
+ * @returns {Promise<string>} - Formatted time context string
+ */
+export async function getTimeEventsForContextEnhancement(userId, guildId) {
+  try {
+    // Get upcoming events for this user
+    const upcomingEvents = await getUpcomingContextEvents(userId, guildId);
+    
+    if (!upcomingEvents || upcomingEvents.length === 0) {
+      return ""; // No events to add
+    }
+    
+    // Create context about upcoming events
+    let eventContext = "";
+    
+    for (const event of upcomingEvents) {
+      const eventDate = new Date(event.event_date);
+      const now = new Date();
+      
+      // Format the date/time in a natural way
+      let timeContext;
+      const millisecondsUntil = eventDate - now;
+      const minutesUntil = Math.floor(millisecondsUntil / (1000 * 60));
+      const hoursUntil = Math.floor(minutesUntil / 60);
+      const daysUntil = Math.floor(hoursUntil / 24);
+      
+      if (minutesUntil < 60) {
+        timeContext = minutesUntil <= 0 ? "right now" : `in ${minutesUntil} minutes`;
+      } else if (hoursUntil < 24) {
+        timeContext = `in ${hoursUntil} hour${hoursUntil > 1 ? 's' : ''}`;
+      } else if (daysUntil < 7) {
+        timeContext = `in ${daysUntil} day${daysUntil > 1 ? 's' : ''}`;
+      } else {
+        // Format a date like "March 15th"
+        timeContext = `on ${eventDate.toLocaleDateString('en-US', { 
+          month: 'long', 
+          day: 'numeric' 
+        })}`;
+      }
+      
+      // Add to context in a format similar to memories
+      eventContext += `- The user has ${event.event_type === 'event' ? 'an' : 'a'} ${event.event_type} "${event.event_title}" ${timeContext}`;
+      
+      // Add time if available
+      if (event.event_time) {
+        eventContext += ` at ${event.event_time}`;
+      }
+      
+      // Add description if available
+      if (event.description) {
+        eventContext += `. Details: ${event.description}`;
+      }
+      
+      eventContext += "\n";
+      
+      // Mark as added to context
+      await markContextAdded(event.id);
+    }
+    
+    return eventContext.trim();
+  } catch (error) {
+    logger.error(`Error getting time events for context enhancement for user ${userId}:`, error);
+    return ""; // Return empty string on error
+  }
+}
+
+/**
+ * Enhanced function to analyze and store conversation instructions for future reference
+ * @param {string} userId - User ID
+ * @param {string} content - Message content that contains time information
+ * @param {Object} eventInfo - Extracted event information
+ * @param {string} guildId - Guild ID
+ * @returns {Promise<string>} - Conversation instructions
+ */
+async function generateConversationInstructions(userId, content, eventInfo, guildId) {
+  try {
+    // Create a prompt that asks for instructions on how to bring this up later
+    const prompt = `
+You are analyzing a message to prepare contextual instructions for a future conversation.
+
+USER MESSAGE: "${content}"
+
+TIME-RELATED EVENT DETECTED:
+- Title: ${eventInfo.title || 'Unnamed event'}
+- Type: ${eventInfo.type || 'event'}
+- Date: ${eventInfo.date || 'unknown date'}
+- Time: ${eventInfo.time || 'unspecified time'}
+- Description: ${eventInfo.description || 'No additional details'}
+
+Provide concise, natural conversation instructions for how to bring up this event later when it's about to happen. The instructions should:
+1. Guide how to naturally mention the event
+2. Suggest appropriate questions or comments based on the event type
+3. Include sensitivity/tone guidance (is this a serious event, fun event, etc.)
+4. NOT include specific phrasings or templates - just conversation guidance
+
+Format as a short paragraph of instructions only. These instructions will be used by an AI assistant named Bri who has the personality of a friendly 14-year-old girl.`;
+
+    // Call OpenAI to generate conversation instructions
+    const completion = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [
+        { role: "system", content: "You are an AI conversation planning assistant. You analyze messages and create natural conversation instructions." },
+        { role: "user", content: prompt }
+      ],
+      max_tokens: 300,
+    });
+    
+    const instructions = completion.choices[0].message.content.trim();
+    logger.info(`Generated conversation instructions for user ${userId} event: ${eventInfo.title}`);
+    
+    return instructions;
+  } catch (error) {
+    logger.error(`Error generating conversation instructions: ${error}`);
+    // Fallback instructions if we can't generate custom ones
+    return `Reference the upcoming ${eventInfo.type || 'event'} in a natural, conversational way. Ask how the user feels about it and if they're prepared.`;
+  }
+}
+
+/**
+ * Stores a context event with conversation instructions
+ * @param {string} userId - User ID
+ * @param {string} guildId - Guild ID
+ * @param {Object} eventInfo - Event information
+ * @param {string} originalMessage - The original message that mentioned the event
+ * @returns {Promise<Object|null>} - Created event or null
+ */
+export async function storeContextEventWithInstructions(userId, guildId, eventInfo, originalMessage) {
+  try {
+    // Validate required fields
+    if (!userId || !guildId || !eventInfo.title || !eventInfo.date) {
+      logger.error("Missing required fields for context event creation:", { userId, guildId, eventInfo });
+      return null;
+    }
+    
+    // Generate conversation instructions for this event
+    const conversationInstructions = await generateConversationInstructions(
+      userId, 
+      originalMessage, 
+      eventInfo, 
+      guildId
+    );
+    
+    // Create the event in the database
+    const { data, error } = await supabase
+      .from('bri_context_events')
+      .insert({
+        user_id: userId,
+        guild_id: guildId,
+        event_title: eventInfo.title,
+        event_type: eventInfo.type || 'event',
+        event_date: new Date(eventInfo.date + (eventInfo.time ? `T${eventInfo.time}` : 'T12:00:00')).toISOString(),
+        event_time: eventInfo.time || null,
+        description: eventInfo.description || null,
+        extracted_from: 'conversation',
+        context_added: false,
+        unprompted_sent: false,
+        conversation_instructions: conversationInstructions
+      })
+      .select()
+      .single();
+      
+    if (error) {
+      logger.error("Error creating context event:", error);
+      return null;
+    }
+    
+    logger.info(`Created new context event with instructions: "${data.event_title}" for user ${data.user_id} in guild ${data.guild_id}`);
+    return data;
+  } catch (error) {
+    logger.error("Error in storeContextEventWithInstructions:", error);
+    return null;
+  }
+}
+
+/**
+ * Sends a dynamically generated unprompted message about an upcoming event
+ * @param {Object} event - Event data
+ * @returns {Promise<boolean>} - Success status
+ */
+export async function sendDynamicUnpromptedEventMessage(event) {
+  try {
+    // Check if client is available
+    if (!discordClientRef) {
+      logger.error(`No Discord client available for sending unprompted message about event ${event.id}`);
+      return false;
+    }
+    
+    // Get the server configuration to find the designated channel
+    const serverConfig = await getServerConfig(event.guild_id);
+    if (!serverConfig || !serverConfig.designated_channels || serverConfig.designated_channels.length === 0) {
+      logger.error(`No designated channels found for guild ${event.guild_id}`);
+      return false;
+    }
+    
+    // Use the first designated channel
+    const channelId = serverConfig.designated_channels[0];
+    
+    // Try to fetch the channel
+    let channel;
+    try {
+      channel = await discordClientRef.channels.fetch(channelId);
+    } catch (channelError) {
+      logger.error(`Error fetching channel ${channelId}:`, channelError);
+      return false;
+    }
+    
+    if (!channel) {
+      logger.error(`Channel not found: ${channelId}`);
+      return false;
+    }
+    
+    // Get user's character sheet
+    let characterSheetInfo = "";
+    try {
+      characterSheetInfo = await getCharacterSheetForPrompt(event.user_id, event.guild_id);
+    } catch (charError) {
+      logger.error(`Error getting character sheet for user ${event.user_id}:`, charError);
+    }
+    
+    // Format event timing information
+    const eventDate = new Date(event.event_date);
+    const now = new Date();
+    const minutesUntil = Math.floor((eventDate - now) / (1000 * 60));
+    
+    // Create a natural time description
+    let timeDescription;
+    if (minutesUntil < 15) {
+      timeDescription = "happening right now";
+    } else if (minutesUntil < 30) {
+      timeDescription = "happening in less than 30 minutes";
+    } else if (minutesUntil < 60) {
+      timeDescription = "happening in less than an hour";
+    } else {
+      timeDescription = "happening soon";
+    }
+    
+    // Build the prompt for generating the message
+    const systemPrompt = `${STATIC_CORE_PROMPT}
+
+${characterSheetInfo ? characterSheetInfo : ""}
+
+You are about to send an unprompted message to a user about an upcoming event they mentioned. This is NOT a response to anything they just said - you are initiating this conversation.
+
+Event details:
+- Title: ${event.event_title}
+- Type: ${event.event_type}
+- Time: ${timeDescription}
+${event.description ? `- Details: ${event.description}` : ""}
+
+How to mention this event: ${event.conversation_instructions || "Mention this event in a natural, conversational way. Ask how they feel about it."}
+
+Important guidelines:
+1. Start with a greeting that includes the user's name or a ping (@user)
+2. Be concise but friendly - this is an unprompted message
+3. Make it sound natural, as if you just remembered this event is coming up
+4. Include appropriate emojis (1-2 is enough) to match the tone
+5. Keep the entire message under 2-3 sentences
+6. Don't explicitly mention that this is an automated reminder`;
+    
+    // Generate a personalized message using OpenAI
+    const completion = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [
+        { role: "system", content: systemPrompt },
+        { role: "user", content: "Generate an unprompted message to mention this upcoming event." }
+      ],
+      max_tokens: 300,
+      temperature: 0.7, // Slightly more creative
+    });
+    
+    // Get the generated message
+    let generatedMessage = completion.choices[0].message.content.trim();
+    
+    // Ensure the message mentions the user with a ping if it doesn't include their name already
+    if (!generatedMessage.includes("@")) {
+      generatedMessage = `<@${event.user_id}> ${generatedMessage}`;
+    } else {
+      // If it has @user placeholder, replace with actual ping
+      generatedMessage = generatedMessage.replace(/@user/gi, `<@${event.user_id}>`);
+    }
+    
+    // Send the message
+    await channel.send(generatedMessage);
+    
+    logger.info(`Sent dynamic unprompted message to user ${event.user_id} in channel ${channelId} about event ${event.id}`);
+    return true;
+  } catch (error) {
+    logger.error(`Error sending dynamic unprompted message for event ${event.id}:`, error);
+    return false;
+  }
+}
+
+/**
+ * Process upcoming events and send unprompted messages
+ * Updated version that uses dynamic AI-generated messages
+ */
+export async function processContextEventsForUnprompted() {
+  try {
+    // Get events coming up in the next 1 hour
+    const now = new Date();
+    const oneHourFromNow = new Date(now.getTime() + 60 * 60 * 1000);
+    
+    // Find events that:
+    // 1. Are happening within the next hour
+    // 2. Haven't had an unprompted message sent yet
+    const { data, error } = await supabase
+      .from('bri_context_events')
+      .select('*')
+      .gte('event_date', now.toISOString())
+      .lt('event_date', oneHourFromNow.toISOString())
+      .eq('unprompted_sent', false);
+      
+    if (error) {
+      logger.error("Error fetching events for unprompted messages:", error);
+      return;
+    }
+    
+    if (!data || data.length === 0) {
+      return;
+    }
+    
+    logger.info(`Found ${data.length} events for potential unprompted messages`);
+    
+    // Process each event
+    for (const event of data) {
+      try {
+        // Check if user allows unprompted messages
+        const allowsUnprompted = await userAllowsUnpromptedMessages(event.user_id, event.guild_id);
+        
+        if (!allowsUnprompted) {
+          // Mark as sent anyway so we don't keep checking
+          await markUnpromptedSent(event.id);
+          continue;
+        }
+        
+        // Use the dynamic message generation instead of templates
+        await sendDynamicUnpromptedEventMessage(event);
+        
+        // Mark as sent
+        await markUnpromptedSent(event.id);
+      } catch (eventError) {
+        logger.error(`Error processing unprompted message for event ${event.id}:`, eventError);
+      }
+    }
+  } catch (error) {
+    logger.error("Error processing context events for unprompted messages:", error);
+  }
+}
+
+/**
+ * Gets upcoming context events for a user
+ * @param {string} userId - User ID
+ * @param {string} guildId - Guild ID
+ * @param {number} hoursAhead - Look ahead hours (default 24)
+ * @returns {Promise<Array>} - Upcoming events
+ */
+export async function getUpcomingContextEvents(userId, guildId, hoursAhead = 24) {
+  try {
+    const now = new Date();
+    const futureTime = new Date(now.getTime() + hoursAhead * 60 * 60 * 1000);
+    
+    const { data, error } = await supabase
+      .from('bri_context_events')
+      .select('*')
+      .eq('user_id', userId)
+      .eq('guild_id', guildId)
+      .gte('event_date', now.toISOString())
+      .lt('event_date', futureTime.toISOString())
+      .order('event_date', { ascending: true });
+      
+    if (error) {
+      logger.error(`Error fetching upcoming context events for user ${userId}:`, error);
+      return [];
+    }
+    
+    return data || [];
+  } catch (error) {
+    logger.error(`Error in getUpcomingContextEvents for user ${userId}:`, error);
+    return [];
+  }
+}
+
+/**
+ * Marks context as added to system prompt
+ * @param {number} eventId - Event ID
+ * @returns {Promise<boolean>} - Success status
+ */
+export async function markContextAdded(eventId) {
+  try {
+    const { error } = await supabase
+      .from('bri_context_events')
+      .update({
+        context_added: true
+      })
+      .eq('id', eventId);
+      
+    if (error) {
+      logger.error(`Error marking context added for event ${eventId}:`, error);
+      return false;
+    }
+    
+    return true;
+  } catch (error) {
+    logger.error(`Error in markContextAdded for event ${eventId}:`, error);
+    return false;
+  }
+}
+
+/**
+ * Checks if a user allows unprompted messages
+ * Default to true for now
+ * @param {string} userId - User ID
+ * @returns {Promise<boolean>} - Whether unprompted messages are allowed
+ */
+export async function userAllowsUnpromptedMessages(userId) {
+  try {
+    // For now, default to true as requested
+    return true;
+    
+    /* Real implementation would be something like:
+    const { data, error } = await supabase
+      .from('user_settings')
+      .select('allow_unprompted')
+      .eq('user_id', userId)
+      .single();
+      
+    if (error || !data) {
+      return true; // Default to true if no setting found
+    }
+    
+    return data.allow_unprompted !== false; // Default to true if null
+    */
+  } catch (error) {
+    logger.error(`Error checking unprompted message preference for user ${userId}:`, error);
+    return true; // Default to true on error
+  }
+}
+
+/**
+ * Marks an unprompted message as sent
+ * @param {number} eventId - Event ID
+ * @returns {Promise<boolean>} - Success status
+ */
+export async function markUnpromptedSent(eventId) {
+  try {
+    const { error } = await supabase
+      .from('bri_context_events')
+      .update({
+        unprompted_sent: true
+      })
+      .eq('id', eventId);
+      
+    if (error) {
+      logger.error(`Error marking unprompted sent for event ${eventId}:`, error);
+      return false;
+    }
+    
+    return true;
+  } catch (error) {
+    logger.error(`Error in markUnpromptedSent for event ${eventId}:`, error);
+    return false;
+  }
+}
+
+export async function processTimeAwareEventsEnhanced() {
+  try {
+    //logger.info("Processing time-aware events...");
+    
+    // Existing steps
+    await processEventReminders();
+    await processScheduledMessages();
+    await processEventFollowUps();
+    
+    // New step: Process context events for unprompted messages
+    await processContextEventsForUnprompted();
+    
+    //logger.info("Finished processing time-aware events");
+  } catch (error) {
+    logger.error("Error in processTimeAwareEventsEnhanced:", error);
+  }
+}
