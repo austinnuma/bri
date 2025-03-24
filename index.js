@@ -21,6 +21,7 @@ import {
   initializeUserCharacterSheetSystem, 
   scheduleCharacterSheetUpdates 
 } from './utils/userCharacterSheet.js';
+import { integrateMemoryEnhancements } from './utils/memoryGraphInitializer.js';
 
 
 // Initialize Discord client with the required intents
@@ -250,6 +251,15 @@ try {
 } catch (error) {
   logger.error("Error initializing character development system:", error);
 }
+
+// Initialize memory graph and temporal systems
+try {
+  await integrateMemoryEnhancements(client);
+  logger.info("Memory graph and temporal systems initialized");
+} catch (error) {
+  logger.error("Error initializing memory graph systems:", error);
+}
+
 // Set up periodic tasks
 // Run storyline advancement daily
 setInterval(advanceStorylinesPeriodicTask, 24 * 60 * 60 * 1000);

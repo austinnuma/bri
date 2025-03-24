@@ -858,7 +858,7 @@ export async function scheduleRoutineJournalEntries(guildId) {
     await ensureScheduledJournalEntriesTable();
     
     // Get timezone for this guild (using first user's timezone as fallback)
-    let timezone = 'America/New_York'; // Default fallback
+    let timezone = 'America/Chicago'; // Default fallback
     try {
       const { data: timezoneData, error: tzError } = await supabase
         .from('user_timezones')
@@ -1270,7 +1270,7 @@ export function schedulePendingInterestCheck(guildId) {
     const checkMinute = Math.floor(Math.random() * 30); // 0-30 minutes past the hour
     
     // Get timezone for this guild (using default timezone as fallback)
-    let timezone = 'America/New_York'; // Default fallback
+    let timezone = 'America/Chicago'; // Default fallback
     try {
       const { data: timezoneData } = supabase
         .from('user_timezones')
@@ -1762,7 +1762,7 @@ export function scheduleCharacterSheetAging(guildId) {
     const checkMinute = Math.floor(Math.random() * 30); // 0-30 minutes past the hour
     
     // Get timezone for this guild (using default timezone as fallback)
-    let timezone = 'America/New_York'; // Default fallback
+    let timezone = 'America/Chicago'; // Default fallback
     try {
       const { data: timezoneData } = supabase
         .from('user_timezones')

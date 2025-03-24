@@ -38,12 +38,6 @@ import {
   updateConversationStyle 
 } from './userCharacterSheet.js';
 import { getTimeEventsForContextEnhancement } from './timeSystem.js';
-import { 
-  retrieveMemoriesWithGraphAndTemporal, 
-  contextAwareMemoryRetrievalWithEnhancements,
-  identifyMemoryContext,
-  enhancePromptWithMemoryContext
-} from './enhancedGraphMemoryRetrieval.js';
 
 
 // Initialize Supabase client using environment variables.
@@ -486,8 +480,8 @@ export async function insertIntuitedMemory(userId, memoryText, confidence = 0.8,
  * @returns {Promise<string>} - Relevant memories as text
  */
 export async function retrieveRelevantMemories(userId, query, limit = 5, memoryType = null, category = null, guildId) {
-  // Use the enhanced retrieval with graph and temporal understanding
-  return await retrieveMemoriesWithGraphAndTemporal(userId, query, limit, memoryType, category, guildId);
+  // Use the enhanced retrieval function instead
+  return await retrieveMemoriesWithConfidence(userId, query, limit, memoryType, category, guildId);
 }
 
 /**
@@ -502,30 +496,21 @@ export async function getCombinedSystemPromptWithMemories(userId, basePrompt, qu
   // First get the user character sheet formatted for the prompt
   const characterSheetInfo = await getCharacterSheetForPrompt(userId, guildId);
   
-  // Identify memory context
-  const memoryContext = await identifyMemoryContext(userId, query, guildId);
-  
-  // Enhance base prompt with memory context
-  let enhancedBasePrompt = basePrompt;
-  if (memoryContext && memoryContext.has_context) {
-    enhancedBasePrompt = enhancePromptWithMemoryContext(basePrompt, memoryContext);
-  }
-  
-  // If conversation context is provided, use enhanced context-aware retrieval
+  // If conversation context is provided, use context-aware retrieval
   let allMemories;
   
   if (conversation && conversation.length > 0) {
-    allMemories = await contextAwareMemoryRetrievalWithEnhancements(userId, query, conversation, guildId);
+    allMemories = await contextAwareMemoryRetrieval(userId, query, conversation, guildId);
   } else {
-    // Otherwise fall back to standard graph+temporal retrieval
-    allMemories = await retrieveMemoriesWithGraphAndTemporal(userId, query, 6, null, null, guildId);
+    // Otherwise fall back to standard retrieval
+    allMemories = await retrieveMemoriesWithConfidence(userId, query, 6, null, null, guildId);
   }
   
   // Get time-related events for context enhancement
   const timeContext = await getTimeEventsForContextEnhancement(userId, guildId);
   
   // Combine the prompt with character sheet and memories
-  let combined = enhancedBasePrompt;
+  let combined = basePrompt;
 
   // Add character sheet info if available
   if (characterSheetInfo && characterSheetInfo.trim() !== "") {

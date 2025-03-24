@@ -179,107 +179,131 @@ export async function createMemoryConnection(sourceMemoryId, targetMemoryId, rel
  * @returns {Promise<Array>} - Connected memories
  */
 export async function getConnectedMemories(memoryId, relationshipTypes = null, minConfidence = 0.5) {
-  try {
-    // Start query builder
-    let query = supabase
-      .from('memory_connections')
-      .select(`
-        id,
-        relationship_type,
-        confidence,
-        target_memory_id,
-        target:target_memory_id(id, user_id, guild_id, memory_text, memory_type, category, created_at)
-      `)
-      .eq('source_memory_id', memoryId)
-      .gte('confidence', minConfidence);
+    try {
+      // Start query builder for outgoing connections
+      let outgoingQuery = supabase
+        .from('memory_connections')
+        .select('id, relationship_type, confidence, target_memory_id')
+        .eq('source_memory_id', memoryId)
+        .gte('confidence', minConfidence);
+        
+      // Filter by relationship types if provided
+      if (relationshipTypes && relationshipTypes.length > 0) {
+        outgoingQuery = outgoingQuery.in('relationship_type', relationshipTypes);
+      }
       
-    // Filter by relationship types if provided
-    if (relationshipTypes && relationshipTypes.length > 0) {
-      query = query.in('relationship_type', relationshipTypes);
-    }
-    
-    // Order by confidence descending
-    query = query.order('confidence', { ascending: false });
-    
-    const { data: outgoingConnections, error: outgoingError } = await query;
-    
-    if (outgoingError) {
-      logger.error("Error fetching outgoing memory connections:", outgoingError);
+      // Order by confidence descending
+      outgoingQuery = outgoingQuery.order('confidence', { ascending: false });
+      
+      const { data: outgoingConnections, error: outgoingError } = await outgoingQuery;
+      
+      if (outgoingError) {
+        logger.error("Error fetching outgoing memory connections:", outgoingError);
+        return [];
+      }
+      
+      // Fetch target memories for outgoing connections
+      const outgoingMemories = [];
+      if (outgoingConnections && outgoingConnections.length > 0) {
+        // Get all target memory IDs
+        const targetMemoryIds = outgoingConnections.map(conn => conn.target_memory_id);
+        
+        // Fetch all target memories in a single query
+        const { data: targetMemories, error: targetError } = await supabase
+          .from('unified_memories')
+          .select('id, user_id, guild_id, memory_text, memory_type, category, created_at')
+          .in('id', targetMemoryIds);
+          
+        if (!targetError && targetMemories) {
+          // Match connections with their target memories
+          for (const conn of outgoingConnections) {
+            const targetMemory = targetMemories.find(m => m.id === conn.target_memory_id);
+            if (targetMemory) {
+              outgoingMemories.push({
+                connection_id: conn.id,
+                memory_id: targetMemory.id,
+                memory_text: targetMemory.memory_text,
+                memory_type: targetMemory.memory_type,
+                category: targetMemory.category,
+                relationship: conn.relationship_type,
+                confidence: conn.confidence,
+                direction: 'outgoing',
+                created_at: targetMemory.created_at
+              });
+            }
+          }
+        } else if (targetError) {
+          logger.error("Error fetching target memories:", targetError);
+        }
+      }
+      
+      // Now get incoming connections where this memory is the target
+      let incomingQuery = supabase
+        .from('memory_connections')
+        .select('id, relationship_type, confidence, source_memory_id')
+        .eq('target_memory_id', memoryId)
+        .gte('confidence', minConfidence);
+        
+      // Filter by relationship types if provided
+      if (relationshipTypes && relationshipTypes.length > 0) {
+        incomingQuery = incomingQuery.in('relationship_type', relationshipTypes);
+      }
+      
+      // Order by confidence descending  
+      incomingQuery = incomingQuery.order('confidence', { ascending: false });
+      
+      const { data: incomingConnections, error: incomingError } = await incomingQuery;
+      
+      if (incomingError) {
+        logger.error("Error fetching incoming memory connections:", incomingError);
+        return outgoingMemories; // Return just outgoing if incoming fails
+      }
+      
+      // Fetch source memories for incoming connections
+      const incomingMemories = [];
+      if (incomingConnections && incomingConnections.length > 0) {
+        // Get all source memory IDs
+        const sourceMemoryIds = incomingConnections.map(conn => conn.source_memory_id);
+        
+        // Fetch all source memories in a single query
+        const { data: sourceMemories, error: sourceError } = await supabase
+          .from('unified_memories')
+          .select('id, user_id, guild_id, memory_text, memory_type, category, created_at')
+          .in('id', sourceMemoryIds);
+          
+        if (!sourceError && sourceMemories) {
+          // Match connections with their source memories
+          for (const conn of incomingConnections) {
+            const sourceMemory = sourceMemories.find(m => m.id === conn.source_memory_id);
+            if (sourceMemory) {
+              incomingMemories.push({
+                connection_id: conn.id,
+                memory_id: sourceMemory.id,
+                memory_text: sourceMemory.memory_text,
+                memory_type: sourceMemory.memory_type,
+                category: sourceMemory.category,
+                relationship: conn.relationship_type,
+                confidence: conn.confidence,
+                direction: 'incoming',
+                created_at: sourceMemory.created_at
+              });
+            }
+          }
+        } else if (sourceError) {
+          logger.error("Error fetching source memories:", sourceError);
+        }
+      }
+      
+      // Combine and sort results
+      const connectedMemories = [...outgoingMemories, ...incomingMemories];
+      
+      // Sort by confidence
+      return connectedMemories.sort((a, b) => b.confidence - a.confidence);
+    } catch (error) {
+      logger.error("Error in getConnectedMemories:", error);
       return [];
     }
-    
-    // Now get incoming connections where this memory is the target
-    query = supabase
-      .from('memory_connections')
-      .select(`
-        id,
-        relationship_type,
-        confidence,
-        source_memory_id,
-        source:source_memory_id(id, user_id, guild_id, memory_text, memory_type, category, created_at)
-      `)
-      .eq('target_memory_id', memoryId)
-      .gte('confidence', minConfidence);
-      
-    // Filter by relationship types if provided
-    if (relationshipTypes && relationshipTypes.length > 0) {
-      query = query.in('relationship_type', relationshipTypes);
-    }
-    
-    // Order by confidence descending  
-    query = query.order('confidence', { ascending: false });
-    
-    const { data: incomingConnections, error: incomingError } = await query;
-    
-    if (incomingError) {
-      logger.error("Error fetching incoming memory connections:", incomingError);
-      return outgoingConnections || []; // Return just outgoing if incoming fails
-    }
-    
-    // Transform and combine the results
-    const connectedMemories = [];
-    
-    // Process outgoing connections
-    for (const conn of (outgoingConnections || [])) {
-      if (conn.target) {
-        connectedMemories.push({
-          connection_id: conn.id,
-          memory_id: conn.target.id,
-          memory_text: conn.target.memory_text,
-          memory_type: conn.target.memory_type,
-          category: conn.target.category,
-          relationship: conn.relationship_type,
-          confidence: conn.confidence,
-          direction: 'outgoing',
-          created_at: conn.target.created_at
-        });
-      }
-    }
-    
-    // Process incoming connections
-    for (const conn of (incomingConnections || [])) {
-      if (conn.source) {
-        connectedMemories.push({
-          connection_id: conn.id,
-          memory_id: conn.source.id,
-          memory_text: conn.source.memory_text,
-          memory_type: conn.source.memory_type,
-          category: conn.source.category,
-          relationship: conn.relationship_type,
-          confidence: conn.confidence,
-          direction: 'incoming',
-          created_at: conn.source.created_at
-        });
-      }
-    }
-    
-    // Sort by confidence
-    return connectedMemories.sort((a, b) => b.confidence - a.confidence);
-  } catch (error) {
-    logger.error("Error in getConnectedMemories:", error);
-    return [];
   }
-}
 
 /**
  * Analyzes two memories and identifies potential relationships between them

@@ -72,8 +72,6 @@ import {
   extractTimeAndEvent, 
   parseTimeSpecification 
 } from './timeParser.js';
-import { integrateMemoryEnhancements } from './memoryGraphInitializer.js';
-
 
 
 // No longer using in-memory Maps, using database functions instead
@@ -285,6 +283,7 @@ async function handleImageAttachments(message, cleanedContent, guildId) {
   }
 }
 
+// The handleLegacyMessage function should be restructured as follows:
 
 export async function handleLegacyMessage(message) {
   // Skip bot messages
@@ -304,13 +303,6 @@ export async function handleLegacyMessage(message) {
   const userGuildKey = `${message.author.id}:${guildId}`;
   const lastInteraction = userLastActive.get(userGuildKey) || 0;
   const now = Date.now();
-
-  // One-time integration of memory enhancements (will be a no-op on subsequent calls)
-  let memoryEnhancementsIntegrated = false;
-  if (!memoryEnhancementsIntegrated) {
-    memoryEnhancementsIntegrated = true;
-    integrateMemoryEnhancements(message.client);
-  }
   
   // If user was inactive for more than 10 minutes, refresh their cache
   if (now - lastInteraction > 10 * 60 * 1000) {
@@ -656,28 +648,10 @@ export async function handleLegacyMessage(message) {
         
         logger.info(`Triggering summarization for user ${message.author.id} in guild ${guildId} after ${userMessageCounters.get(userGuildCounterKey)} messages`);
         
-        summarizeAndExtract(message.author.id, conversation, guildId).then(async result => {
-          logger.info(`Memory extraction complete for user ${message.author.id} in guild ${guildId}`);
-          
-          // If we have the memory graph system available, build connections for the latest memories
-          if (typeof buildMemoryGraph === 'function') {
-            try {
-              // This function is imported from memoryGraphInitializer.js
-              const { buildMemoryGraph } = await import('./memoryGraphInitializer.js');
-              
-              // Build graph connections for this user's recent memories
-              buildMemoryGraph(message.author.id, guildId, null, 5).then(graphResult => {
-                logger.info(`Memory graph building complete for user ${message.author.id} in guild ${guildId}: ${JSON.stringify(graphResult)}`);
-              }).catch(err => {
-                logger.error(`Error in memory graph building: ${err}`);
-              });
-            } catch (importError) {
-              logger.warn(`Could not import memory graph functions: ${importError}`);
-            }
-          }
-        }).catch(err => {
-          logger.error(`Error in memory extraction process: ${err}`);
-        });
+      // Use incremental extraction - no need to pass message ID anymore
+      summarizeAndExtract(message.author.id, conversation, guildId).catch(err => {
+        logger.error(`Error in memory extraction process: ${err}`);
+      });
         
         // Reset counter and update timestamp immediately
         userMessageCounters.set(userGuildCounterKey, 0);
