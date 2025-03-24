@@ -355,8 +355,8 @@ export async function createMemory(userId, memoryText, memoryType, category, con
       created_at: new Date().toISOString(),
       last_accessed: null,
       access_count: 0,
-      verified: memoryType === MemoryTypes.EXPLICIT, // Explicit memories start verified
-      verification_date: memoryType === MemoryTypes.EXPLICIT ? new Date().toISOString() : null,
+      verified: memoryType === MEMORY_TYPES.EXPLICIT, // Explicit memories start verified
+      verification_date: memoryType === MEMORY_TYPES.EXPLICIT ? new Date().toISOString() : null,
       contradiction_count: 0
       })
         .select()

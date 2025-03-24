@@ -545,14 +545,14 @@ export async function handleLegacyMessage(message) {
     }
 
     // Check for potential inside jokes - only if character feature is enabled
-    if (characterEnabled) {
-      detectAndStoreInsideJoke(message.author.id, cleanedContent, guildId).catch(error => {
-        logger.error("Error detecting inside joke:", error);
-      });
+    //if (characterEnabled) {
+      //detectAndStoreInsideJoke(message.author.id, cleanedContent, guildId).catch(error => {
+        //logger.error("Error detecting inside joke:", error);
+      //});
       
       // Personalize response based on relationship
-      reply = await personalizeResponse(message.author.id, reply, guildId);
-    }
+      //reply = await personalizeResponse(message.author.id, reply, guildId);
+    //}
 
     // Apply emoticons
     reply = replaceEmoticons(reply);
