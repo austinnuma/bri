@@ -9,7 +9,7 @@ import { initializeTemporalMemorySystem, scheduleTemporalAnalysis } from './temp
  */
 export async function initializeMemoryEnhancements(client = null) {
   try {
-    logger.info("Initializing memory enhancement systems...");
+    //logger.info("Initializing memory enhancement systems...");
     
     // Step 1: Initialize memory graph system
     await initializeMemoryGraphSystem();
@@ -21,7 +21,7 @@ export async function initializeMemoryEnhancements(client = null) {
     scheduleMemoryGraphBuilding(24); // Run once a day
     scheduleTemporalAnalysis(12);    // Run twice a day
     
-    logger.info("Memory enhancement systems initialized successfully");
+    //logger.info("Memory enhancement systems initialized successfully");
     
     return true;
   } catch (error) {
@@ -39,7 +39,7 @@ export function integrateMemoryEnhancements(client) {
   // Initialize the enhanced memory systems
   initializeMemoryEnhancements(client).then(success => {
     if (success) {
-      logger.info("Memory enhancements integrated successfully");
+      //logger.info("Memory enhancements integrated successfully");
     } else {
       logger.warn("Memory enhancements integrated with errors");
     }

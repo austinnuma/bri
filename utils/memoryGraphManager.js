@@ -21,7 +21,7 @@ export const RELATIONSHIP_TYPES = {
  */
 export async function initializeMemoryGraphSystem() {
   try {
-    logger.info("Initializing memory graph system...");
+    //logger.info("Initializing memory graph system...");
     
     // Check if the memory_connections table exists
     const { error: connectionCheckError } = await supabase
@@ -64,10 +64,10 @@ export async function initializeMemoryGraphSystem() {
         logger.error("Error creating memory_connections table:", createError);
       }
     } else {
-      logger.info("Memory connections table already exists");
+      //logger.info("Memory connections table already exists");
     }
     
-    logger.info("Memory graph system initialization complete");
+    //logger.info("Memory graph system initialization complete");
   } catch (error) {
     logger.error("Error initializing memory graph system:", error);
   }

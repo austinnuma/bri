@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js';
 import { logger } from './logger.js';
 import { openai } from '../services/combinedServices.js';
 import { supabase } from '../services/combinedServices.js';
+import { getServerConfig } from './serverConfigManager.js';
 
 let discordClientRef = null;
 

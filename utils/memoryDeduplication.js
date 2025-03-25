@@ -37,10 +37,10 @@ export async function semanticDeduplication(userId, newMemories, guildId) {
       });
 
       if (newMemory.embedding) {
-        console.log(`Embedding type: ${typeof newMemory.embedding}`);
-        console.log(`Is array: ${Array.isArray(newMemory.embedding)}`);
-        console.log(`First few values: ${newMemory.embedding.slice(0, 5)}`);
-        console.log(`Embedding length: ${newMemory.embedding.length}`);
+        //console.log(`Embedding type: ${typeof newMemory.embedding}`);
+        //console.log(`Is array: ${Array.isArray(newMemory.embedding)}`);
+        //console.log(`First few values: ${newMemory.embedding.slice(0, 5)}`);
+        //console.log(`Embedding length: ${newMemory.embedding.length}`);
       }
       
       // Log parameters before calling memory_similarity_check

@@ -57,13 +57,13 @@ export async function initializeTemporalMemorySystem() {
         
         logger.info("Temporal analysis column added successfully");
       } else {
-        logger.info("Temporal analysis column already exists");
+        //logger.info("Temporal analysis column already exists");
       }
     } catch (columnError) {
       logger.error("Error checking/adding temporal column:", columnError);
     }
     
-    logger.info("Temporal memory system initialization complete");
+    //logger.info("Temporal memory system initialization complete");
   } catch (error) {
     logger.error("Error initializing temporal memory system:", error);
   }
@@ -903,5 +903,5 @@ export function scheduleTemporalAnalysis(intervalHours = 12) {
     }
   }, intervalMs);
   
-  logger.info(`Temporal analysis scheduled to run every ${intervalHours} hours`);
+  //logger.info(`Temporal analysis scheduled to run every ${intervalHours} hours`);
 }
