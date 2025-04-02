@@ -1,0 +1,8 @@
+{"level":"info","message":"Starting manual seeding of character development data...","timestamp":"2025-03-09T21:58:11.748Z"}
+{"level":"info","message":"Creating tables if they don't exist...","timestamp":"2025-03-09T21:58:12.542Z"}
+{"level":"error","message":"Error ensuring tables exist: supabase.rpc(...).catch is not a function","stack":"TypeError: supabase.rpc(...).catch is not a function\n    at ensureTablesExist (file:///C:/Users/austi/bri/manualSeed.js:163:79)\n    at seedInitialCharacterData (file:///C:/Users/austi/bri/manualSeed.js:294:11)\n    at process.processTicksAndRejections (node:internal/process/task_queues:105:5)","timestamp":"2025-03-09T21:58:12.544Z"}
+{"level":"info","message":"Successfully inserted interest: space exploration","timestamp":"2025-03-09T21:58:12.914Z"}
+{"level":"info","message":"Successfully inserted interest: animals","timestamp":"2025-03-09T21:58:13.217Z"}
+{"level":"info","message":"Successfully inserted interest: arts and crafts","timestamp":"2025-03-09T21:58:13.593Z"}
+{"level":"info","message":"Successfully inserted storyline: science_fair_project","timestamp":"2025-03-09T21:58:13.965Z"}
+{"level":"info","message":"Successfully inserted storyline: learning_chess","timestamp":"2025-03-09T21:58:14.264Z"}
