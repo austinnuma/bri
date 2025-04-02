@@ -26,27 +26,49 @@ export async function retrieveMemoriesWithGraphAndTemporal(userId, query, limit 
     
     // The detailed analysis will happen asynchronously in the background
     
-    // Step 3: Use the RPC function for vector search
-    const { data: matches, error } = await supabase.rpc('match_unified_memories', {
-      p_user_id: userId,
-      p_guild_id: guildId,
-      p_query_embedding: embedding,
-      p_match_threshold: 0.5, // Lower threshold to catch more memories
-      p_match_count: limit * 2, // Get more than we need for reranking
-      p_memory_type: memoryType
-    });
+    // Step 3: Use the direct vector search with manual query instead of RPC function
+    // to avoid timestamp type mismatch errors
+    let queryObj = supabase
+      .from('unified_memories')
+      .select('*')
+      .eq('user_id', userId)
+      .limit(limit * 2);  // Get more than we need for reranking
+    
+    // Add optional filters
+    if (guildId) {
+      queryObj = queryObj.eq('guild_id', guildId);
+    }
+    
+    if (memoryType) {
+      queryObj = queryObj.eq('memory_type', memoryType);
+    }
+    
+    if (category) {
+      queryObj = queryObj.eq('category', category);
+    }
+    
+    // Order by last_accessed (most recently accessed first)
+    // and then by confidence (highest first)
+    queryObj = queryObj.order('last_accessed', { ascending: false, nullsLast: true })
+                       .order('confidence', { ascending: false });
+    
+    const { data: memories, error } = await queryObj;
     
     if (error) {
-      logger.error("Error retrieving memories with graph and temporal:", { error, userId, guildId });
+      logger.error("Error retrieving memories with direct query:", { error, userId, guildId });
       return "";
     }
     
-    if (!matches || matches.length === 0) {
+    if (!memories || memories.length === 0) {
       return "";
     }
+    
+    // Filter memories by vector similarity manually since we can't use the RPC function
+    // This is less efficient but will work as a fallback
+    const similarMemories = await filterMemoriesByVectorSimilarity(memories, embedding, 0.5, limit * 2);
     
     // Step 4: Process and rerank memories based on confidence and similarity
-    const processedMemories = processRetrievedMemories(matches);
+    const processedMemories = processRetrievedMemories(similarMemories);
     
     // Step 5: Enhance with graph connections
     const graphEnhancedMemories = await enhanceMemoriesWithGraph(
@@ -86,6 +108,134 @@ export async function retrieveMemoriesWithGraphAndTemporal(userId, query, limit 
     return formattedMemories;
   } catch (error) {
     logger.error("Error in retrieveMemoriesWithGraphAndTemporal:", error, error.stack, { userId, guildId });
+    // Fallback to a simpler approach
+    return await getSimpleMemories(userId, query, limit, memoryType, category, guildId);
+  }
+}
+
+/**
+ * Calculates cosine similarity between two embedding vectors
+ * @param {Array} vec1 - First embedding vector
+ * @param {Array} vec2 - Second embedding vector
+ * @returns {number} - Cosine similarity (between -1 and 1)
+ */
+function cosineSimilarity(vec1, vec2) {
+  let dotProduct = 0;
+  let vec1Magnitude = 0;
+  let vec2Magnitude = 0;
+  
+  for (let i = 0; i < vec1.length; i++) {
+    dotProduct += vec1[i] * vec2[i];
+    vec1Magnitude += vec1[i] * vec1[i];
+    vec2Magnitude += vec2[i] * vec2[i];
+  }
+  
+  vec1Magnitude = Math.sqrt(vec1Magnitude);
+  vec2Magnitude = Math.sqrt(vec2Magnitude);
+  
+  if (vec1Magnitude === 0 || vec2Magnitude === 0) {
+    return 0;
+  }
+  
+  return dotProduct / (vec1Magnitude * vec2Magnitude);
+}
+
+/**
+ * Filters memories by vector similarity
+ * @param {Array} memories - Array of memory objects with embeddings
+ * @param {Array} queryEmbedding - Query embedding vector
+ * @param {number} threshold - Similarity threshold (0-1)
+ * @param {number} limit - Maximum number of memories to return
+ * @returns {Array} - Filtered and sorted memories
+ */
+async function filterMemoriesByVectorSimilarity(memories, queryEmbedding, threshold, limit) {
+  try {
+    // Add similarity score to each memory
+    const memoriesWithSimilarity = memories.map(memory => {
+      // Some memories might not have embeddings
+      if (!memory.embedding) {
+        return { ...memory, similarity: 0 };
+      }
+      
+      const similarity = cosineSimilarity(memory.embedding, queryEmbedding);
+      return { ...memory, similarity };
+    });
+    
+    // Filter by threshold and sort by similarity
+    return memoriesWithSimilarity
+      .filter(memory => memory.similarity >= threshold)
+      .sort((a, b) => b.similarity - a.similarity)
+      .slice(0, limit);
+  } catch (error) {
+    logger.error("Error in filterMemoriesByVectorSimilarity:", error);
+    // Return original memories as fallback
+    return memories.slice(0, limit);
+  }
+}
+
+/**
+ * Simple backup memory retriever that doesn't use vector search
+ * @param {string} userId - The user's ID
+ * @param {string} query - The query text
+ * @param {number} limit - Maximum number of memories to return
+ * @param {string} memoryType - Filter by memory type (optional)
+ * @param {string} category - Filter by category (optional)
+ * @param {string} guildId - The guild ID
+ * @returns {Promise<string>} - Relevant memories as text
+ */
+async function getSimpleMemories(userId, query, limit = 5, memoryType = null, category = null, guildId) {
+  try {
+    // Prepare query builder
+    let queryObj = supabase
+      .from('unified_memories')
+      .select('*')
+      .eq('user_id', userId)
+      .order('confidence', { ascending: false })
+      .limit(limit);
+    
+    // Add optional filters
+    if (guildId) {
+      queryObj = queryObj.eq('guild_id', guildId);
+    }
+    
+    if (memoryType) {
+      queryObj = queryObj.eq('memory_type', memoryType);
+    }
+    
+    if (category) {
+      queryObj = queryObj.eq('category', category);
+    }
+    
+    // Try keyword match on memory_text if we have a query
+    if (query && query.trim()) {
+      const keywords = query.toLowerCase().split(/\s+/)
+        .filter(word => word.length > 3) // Only use meaningful words
+        .slice(0, 3);  // Take top 3 words
+      
+      // If we have useful keywords, add ILIKE conditions
+      if (keywords.length > 0) {
+        let ilikeConditions = keywords.map(word => `memory_text.ilike.%${word}%`);
+        queryObj = queryObj.or(ilikeConditions.join(','));
+      }
+    }
+    
+    const { data: memories, error } = await queryObj;
+    
+    if (error) {
+      logger.error("Error in getSimpleMemories:", error);
+      return "";
+    }
+    
+    if (!memories || memories.length === 0) {
+      return "";
+    }
+    
+    // Format memories as simple text
+    return memories
+      .map(memory => `- ${memory.memory_text}`)
+      .join("\n");
+  } catch (error) {
+    logger.error("Error in getSimpleMemories:", error);
     return "";
   }
 }
@@ -130,15 +280,22 @@ export async function identifyMemoryContext(userId, query, guildId) {
     // Get basic temporal query context (non-blocking)
     const temporalContext = getBasicTemporalContext(query);
     
-    // Get initial memories
+    // Get embedding for query
     const embedding = await getEmbedding(query);
-    const { data: matches, error } = await supabase.rpc('match_unified_memories', {
-      p_user_id: userId,
-      p_guild_id: guildId,
-      p_query_embedding: embedding,
-      p_match_threshold: 0.6,
-      p_match_count: 5
-    });
+    
+    // Use direct query instead of rpc function
+    let queryObj = supabase
+      .from('unified_memories')
+      .select('*')
+      .eq('user_id', userId)
+      .order('confidence', { ascending: false })
+      .limit(5);
+    
+    if (guildId) {
+      queryObj = queryObj.eq('guild_id', guildId);
+    }
+    
+    const { data: matches, error } = await queryObj;
     
     if (error || !matches || matches.length === 0) {
       return {
@@ -148,8 +305,19 @@ export async function identifyMemoryContext(userId, query, guildId) {
       };
     }
     
+    // Filter by vector similarity
+    const filteredMatches = await filterMemoriesByVectorSimilarity(matches, embedding, 0.6, 5);
+    
+    if (filteredMatches.length === 0) {
+      return {
+        has_context: false,
+        temporal_focus: temporalContext.time_focus,
+        memories_found: 0
+      };
+    }
+    
     // Process the matches
-    const processedMemories = processRetrievedMemories(matches);
+    const processedMemories = processRetrievedMemories(filteredMatches);
     
     // Get the top memory
     const topMemory = processedMemories[0];
