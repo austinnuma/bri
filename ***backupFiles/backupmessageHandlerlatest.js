@@ -1,4 +1,6 @@
 // Complete multi-server messageHandler.js
+// (This is the full implementation - replace your current file with this)
+
 import { 
   getEffectiveSystemPrompt, 
   getCombinedSystemPromptWithMemories, 
@@ -9,13 +11,6 @@ import {
   insertIntuitedMemory,
   categorizeMemory 
 } from './unifiedMemoryManager.js';
-import {
-  getUserConversation,
-  getUserContextLength,
-  setUserConversation,
-  getUserDynamicPrompt,
-  setUserDynamicPrompt
-} from './db/userSettings.js';
 import { splitMessage, replaceEmoticons } from './textUtils.js';
 import { openai, getChatCompletion, defaultAskModel, supabase } from '../services/combinedServices.js';
 import { logger } from './logger.js';
@@ -37,35 +32,8 @@ import { extractTimeAndEvent, createEvent, EVENT_TYPES, REMINDER_TIMES, getUserT
 import { getEmbedding } from './improvedEmbeddings.js';
 import natural from 'natural';
 import { getServerConfig, getServerPrefix, isFeatureEnabled } from './serverConfigManager.js';
-import { 
-  hasEnoughCredits, 
-  useCredits, 
-  CREDIT_COSTS, 
-  getServerCredits 
-} from './creditManager.js';
-import { 
-  getMemoriesForVerification, 
-  generateVerificationQuestion,
-  processVerificationResponse 
-} from './memoryVerification.js';
-import { 
-  semanticDeduplication, 
-  updateLastExtractedMessage,
-  getLastExtractedMessage 
-} from './memoryDeduplication.js';
-import { 
-  incrementalMemoryExtraction, 
-  updateExtractionTracking 
-} from './incrementalMemoryExtraction.js';
-import { 
-  getUserCharacterSheet, 
-  getCharacterSheetForPrompt, 
-  updateConversationStyle 
-} from './userCharacterSheet.js';
 
-
-// No longer using in-memory Maps, using database functions instead
-// const { userConversations, userContextLengths, userDynamicPrompts } = memoryManagerState;
+const { userConversations, userContextLengths, userDynamicPrompts } = memoryManagerState;
 
 const SUMMARY_THRESHOLD = 3;
 const INACTIVITY_THRESHOLD = 8 * 60 * 60 * 1000; // 8 hours
@@ -84,57 +52,6 @@ function normalizeForComparison(text) {
     .replace(/\s{2,}/g, " ")
     .trim();
 }
-
-// Track which users have pending memory verifications
-const pendingVerifications = new Map();
-
-
-/**
- * Checks if a server has sufficient credits for a chat operation
- * @param {string} guildId - The Discord guild ID
- * @returns {Promise<{hasCredits: boolean, credits: Object|null, insufficientMessage: string|null}>}
- */
-async function checkServerCreditsForChat(guildId) {
-  try {
-    // Check if this server has credits enabled
-    const serverConfig = await getServerConfig(guildId);
-    const creditsEnabled = serverConfig?.credits_enabled === true;
-    
-    // If credits are not enabled, always return true
-    if (!creditsEnabled) {
-      return { hasCredits: true, credits: null, insufficientMessage: null };
-    }
-    
-    const operationType = 'CHAT_MESSAGE';
-    
-    // Check if server has enough credits
-    const hasCredits = await hasEnoughCredits(guildId, operationType);
-    
-    if (!hasCredits) {
-      // Get current credit information for a more helpful message
-      const credits = await getServerCredits(guildId);
-      
-      // Create a user-friendly message
-      const insufficientMessage = 
-        "⚠️ **Not enough credits!** This server has run out of credits to use Bri. " +
-        `Currently available: ${credits?.remaining_credits || 0} credits. ` +
-        "Server administrators can purchase more credits on the Bri website or wait for your monthly refresh.";
-      
-      return { 
-        hasCredits: false, 
-        credits, 
-        insufficientMessage 
-      };
-    }
-    
-    return { hasCredits: true, credits: null, insufficientMessage: null };
-  } catch (error) {
-    logger.error(`Error checking credits for chat in ${guildId}:`, error);
-    // If there's an error, let the message through
-    return { hasCredits: true, credits: null, insufficientMessage: null };
-  }
-}
-
 
 /**
  * Checks if a memory text is similar to any existing memory for a user
@@ -223,8 +140,8 @@ async function handleImageAttachments(message, cleanedContent, guildId) {
     // Get all image URLs
     const imageUrls = imageAttachments.map(attachment => attachment.url);
     
-    // Get conversation history for this user from database
-    let conversationHistory = await getUserConversation(message.author.id, guildId) || [];
+    // Get conversation history for this user to provide context
+    let conversationHistory = userConversations.get(`${message.author.id}:${guildId}`) || [];
     
     // Use the enhanced analyzeImages function with conversation context
     const imageDescription = await analyzeImages(
@@ -253,13 +170,23 @@ async function handleImageAttachments(message, cleanedContent, guildId) {
       });
       
       // Apply context length limits if needed
-      const contextLength = await getUserContextLength(message.author.id, guildId) || defaultContextLength;
+      const contextLength = userContextLengths.get(`${message.author.id}:${guildId}`) || defaultContextLength;
       if (conversationHistory.length > contextLength) {
         conversationHistory = [conversationHistory[0], ...conversationHistory.slice(-(contextLength - 1))];
       }
       
-      // Save the updated conversation to database
-      await setUserConversation(message.author.id, guildId, conversationHistory);
+      // Save the updated conversation
+      userConversations.set(`${message.author.id}:${guildId}`, conversationHistory);
+      
+      // Save to database with guild ID
+      await supabase.from('user_conversations').upsert({
+        user_id: message.author.id,
+        guild_id: guildId,
+        conversation: conversationHistory,
+        system_prompt: STATIC_CORE_PROMPT + "\n" + (userDynamicPrompts.get(`${message.author.id}:${guildId}`) || ""),
+        context_length: userContextLengths.get(`${message.author.id}:${guildId}`) || defaultContextLength,
+        updated_at: new Date().toISOString(),
+      });
       
       invalidateUserCache(message.author.id, guildId);
     }
@@ -273,8 +200,12 @@ async function handleImageAttachments(message, cleanedContent, guildId) {
   }
 }
 
-// The handleLegacyMessage function should be restructured as follows:
-
+/**
+ * Handles legacy (non-slash) messages.
+ * Processes images, memory commands, user queries, and normal chat.
+ *
+ * @param {Message} message - The Discord message object.
+ */
 export async function handleLegacyMessage(message) {
   // Skip bot messages
   if (message.author.bot) return;
@@ -304,26 +235,6 @@ export async function handleLegacyMessage(message) {
 
   const isDesignated = serverConfig.designated_channels.includes(message.channel.id);
   let cleanedContent = message.content;
-
-   // Check if this is a response to a verification question
-   if (pendingVerifications.has(userGuildKey)) {
-     const verification = pendingVerifications.get(userGuildKey);
-     
-     // Process the verification response
-     const result = await processVerificationResponse(
-       message.author.id, 
-       verification.memoryId, 
-       cleanedContent,
-       guildId
-     );
-     
-     if (result.success) {
-       // Clear the pending verification
-       pendingVerifications.delete(userGuildKey);
-       
-       // No need to respond here - continue with normal message processing
-     }
-   }
   
   // Check for attached images and store the result
   const imageAttachments = message.attachments.filter(isImageAttachment);
@@ -360,54 +271,13 @@ export async function handleLegacyMessage(message) {
     }
   }
   
- // Handle image analysis if feature is enabled
- if (imageAttachments.size > 0 && await isFeatureEnabled(guildId, 'character')) {
-  // First check if this server has credits enabled
-  const serverConfig = await getServerConfig(guildId);
-  const creditsEnabled = serverConfig?.credits_enabled === true;
-  
-  // Import the subscription check function
-  const { isFeatureSubscribed, SUBSCRIPTION_FEATURES } = await import('./subscriptionManager.js');
-  
-  // Check if server has unlimited vision with subscription
-  const hasUnlimitedVision = await isFeatureSubscribed(guildId, SUBSCRIPTION_FEATURES.UNLIMITED_VISION);
-  
-  // If credits are enabled and server doesn't have unlimited vision, check credits
-  if (creditsEnabled && !hasUnlimitedVision) {
-    const operationType = 'VISION_ANALYSIS';
-    
-    // Check if server has enough credits
-    const hasCredits = await hasEnoughCredits(guildId, operationType);
-    
-    if (!hasCredits) {
-      // Get current credit information for a more helpful message
-      const credits = await getServerCredits(guildId);
-      
-      await message.reply(
-        `⚠️ **Not enough credits!** This server doesn't have enough credits to analyze images.\n` +
-        `💰 Available: ${credits?.remaining_credits || 0} credits\n` +
-        `💸 Required: ${CREDIT_COSTS['VISION_ANALYSIS']} credits\n\n` +
-        `You can purchase more credits or subscribe to our Enterprise plan for unlimited image analysis!`
-      );
-      return; // Exit without processing images
+  // Handle image analysis if feature is enabled
+  if (imageAttachments.size > 0 && await isFeatureEnabled(guildId, 'character')) {
+    const imagesHandled = await handleImageAttachments(message, cleanedContent, guildId);
+    if (imagesHandled) {
+      return; // Exit early if we handled images
     }
   }
-  
-  // Process the images
-  const imagesHandled = await handleImageAttachments(message, cleanedContent, guildId);
-  
-  // If images were handled successfully and credits are enabled, use credits
-  if (imagesHandled && creditsEnabled && !hasUnlimitedVision) {
-    await useCredits(guildId, 'VISION_ANALYSIS');
-    logger.info(`Used ${CREDIT_COSTS['VISION_ANALYSIS']} credits for vision analysis in server ${guildId}`);
-  } else if (imagesHandled && hasUnlimitedVision) {
-    logger.info(`Processed image in server ${guildId} with Enterprise subscription (no credits used)`);
-  }
-  
-  if (imagesHandled) {
-    return; // Exit early if we handled images
-  }
-}
 
   // Memory command check - only if memory feature is enabled
   const memoryEnabled = await isFeatureEnabled(guildId, 'memory');
@@ -446,14 +316,6 @@ export async function handleLegacyMessage(message) {
     });
   }
 
-  // Check if the server has enough credits for a chat message
-  const creditCheck = await checkServerCreditsForChat(guildId);
-  if (!creditCheck.hasCredits) {
-    // Send a message about insufficient credits
-    await message.reply(creditCheck.insufficientMessage);
-    return; // Stop processing
-  }
-
   // Handle regular text messages
   const effectiveSystemPrompt = getEffectiveSystemPrompt(message.author.id, guildId);
   const combinedSystemPrompt = await getCombinedSystemPromptWithMemories(
@@ -463,25 +325,20 @@ export async function handleLegacyMessage(message) {
     guildId
   );
 
-    // Using DB functions now instead of in-memory Map objects
-  
-  // Get conversation from database
-  let conversation = await getUserConversation(message.author.id, guildId) || [
+  // Get conversation with guild context
+  let conversation = userConversations.get(`${message.author.id}:${guildId}`) || [
     { role: "system", content: combinedSystemPrompt }
   ];
   
-  // Update the system prompt and add the user's message
   conversation[0] = { role: "system", content: combinedSystemPrompt };
   conversation.push({ role: "user", content: cleanedContent });
 
-  // Apply context length limit
-  const contextLength = await getUserContextLength(message.author.id, guildId) || defaultContextLength;
+  const contextLength = userContextLengths.get(`${message.author.id}:${guildId}`) || defaultContextLength;
   if (conversation.length > contextLength) {
     conversation = [conversation[0], ...conversation.slice(-(contextLength - 1))];
   }
   
-  // Save updated conversation to database instead of in-memory Map
-  await setUserConversation(message.author.id, guildId, conversation);
+  userConversations.set(`${message.author.id}:${guildId}`, conversation);
 
   await message.channel.sendTyping();
 
@@ -539,14 +396,19 @@ export async function handleLegacyMessage(message) {
     // Apply emoticons
     reply = replaceEmoticons(reply);
 
-    // Update conversation with Bri's response 
+    // Update conversation with Bri's response
     conversation.push({ role: "assistant", content: reply });
-    
-    // Get dynamic prompt directly from database
-    const dynamicPrompt = await getUserDynamicPrompt(message.author.id, guildId);
-    
-    // Save to database directly - overwrite in-memory approach
-    await setUserConversation(message.author.id, guildId, conversation);
+    userConversations.set(`${message.author.id}:${guildId}`, conversation);
+
+    // Save conversation to database with guild ID
+    await supabase.from('user_conversations').upsert({
+      user_id: message.author.id,
+      guild_id: guildId,
+      conversation,
+      system_prompt: STATIC_CORE_PROMPT + "\n" + (userDynamicPrompts.get(`${message.author.id}:${guildId}`) || ""),
+      context_length: userContextLengths.get(`${message.author.id}:${guildId}`) || defaultContextLength,
+      updated_at: new Date().toISOString(),
+    });
     
     invalidateUserCache(message.author.id, guildId);
 
@@ -554,58 +416,6 @@ export async function handleLegacyMessage(message) {
     updateUserMapping(message).catch(err => {
       logger.error("Error updating user mapping", { error: err });
     });
-
-    // If the response was successful, use credits for this chat message
-    if (serverConfig?.credits_enabled) {
-      await useCredits(guildId, 'CHAT_MESSAGE');
-      logger.debug(`Used ${CREDIT_COSTS['CHAT_MESSAGE']} credits for chat message in server ${guildId}`);
-    }
-
-    // Split and send the reply if needed
-    if (reply.length > 2000) {
-      const chunks = splitMessage(reply, 2000);
-      for (const chunk of chunks) {
-        await message.channel.send(chunk);
-      }
-    } else {
-      // Always use reply() for replies to the bot's messages to maintain the thread
-      const isReplyToBot = message.reference && message.reference.messageId;
-      if (isDesignated || isReplyToBot) {
-        await message.reply(reply);
-      } else {
-        await message.channel.send(reply);
-      }
-    }
-
-  // After successfully responding to the user, maybe insert a verification question
-  // Only do this occasionally (e.g., 10% chance)
-  //const memoryEnabled = await isFeatureEnabled(guildId, 'memory');
-  //if (memoryEnabled && Math.random() < 0.1 && !pendingVerifications.has(userGuildKey)) {
-    //try {
-      // Get memories that need verification
-      //const memoriesToVerify = await getMemoriesForVerification(message.author.id, guildId);
-      
-      //if (memoriesToVerify.length > 0) {
-        // Select a random memory to verify
-        //const memoryToVerify = memoriesToVerify[Math.floor(Math.random() * memoriesToVerify.length)];
-        
-        // Generate a natural verification question
-        //const verificationQuestion = generateVerificationQuestion(memoryToVerify);
-        
-        // Send the question
-        //await message.channel.send(verificationQuestion);
-        
-        // Store the pending verification
-        //pendingVerifications.set(userGuildKey, {
-          //memoryId: memoryToVerify.id,
-          //timestamp: Date.now()
-        //});
-      //}
-    //} catch (error) {
-      //logger.error("Error generating verification question:", error);
-      // Don't let verification errors disrupt normal flow
-    //}
-  //}
 
     // Memory extraction if memory feature is enabled
     if (memoryEnabled) {
@@ -624,10 +434,10 @@ export async function handleLegacyMessage(message) {
         
         logger.info(`Triggering summarization for user ${message.author.id} in guild ${guildId} after ${userMessageCounters.get(userGuildCounterKey)} messages`);
         
-      // Use incremental extraction - no need to pass message ID anymore
-      summarizeAndExtract(message.author.id, conversation, guildId).catch(err => {
-        logger.error(`Error in memory extraction process: ${err}`);
-      });
+        // Run summarization and extraction asynchronously to avoid blocking response
+        summarizeAndExtract(message.author.id, conversation, guildId).catch(err => {
+          logger.error(`Error in summarization/extraction process: ${err}`);
+        });
         
         // Reset counter and update timestamp immediately
         userMessageCounters.set(userGuildCounterKey, 0);
@@ -635,24 +445,26 @@ export async function handleLegacyMessage(message) {
       }
     }
 
+    // Split and send the reply if needed
+    if (reply.length > 2000) {
+      const chunks = splitMessage(reply, 2000);
+      for (const chunk of chunks) {
+        await message.channel.send(chunk);
+      }
+    } else {
+      // Always use reply() for replies to the bot's messages to maintain the thread
+      const isReplyToBot = message.reference && message.reference.messageId;
+      if (isDesignated || isReplyToBot) {
+        await message.reply(reply);
+      } else {
+        await message.channel.send(reply);
+      }
+    }
   } catch (error) {
     logger.error("Error in message handler", { error, guildId });
     await message.channel.send("Sorry, an error occurred processing your message.");
   }
-
-  // No code should be here that depends on variables defined within the try block
 }
-
-// Clean up stale verification requests periodically
-setInterval(() => {
-  const now = Date.now();
-    // Remove verification requests older than 2 minutes
-    for (const [key, verification] of pendingVerifications.entries()) {
-      if (now - verification.timestamp > 2 * 60 * 1000) {
-        pendingVerifications.delete(key);
-      }
-    }
-}, 60 * 1000); // Run every minute
 
 /**
  * Updates the user mapping table with the latest user information
@@ -684,38 +496,121 @@ async function updateUserMapping(message) {
  */
 async function summarizeAndExtract(userId, conversation, guildId) {
   try {
-    // Skip if no conversation or too short
-    if (!conversation || conversation.length < 3) {
+    // Create a copy of the conversation to avoid modification during processing
+    const conversationCopy = [...conversation];
+    
+    // Summarize the conversation
+    const summary = await enhancedSummarizeConversation(conversationCopy);
+    if (!summary) {
+      logger.warn(`Failed to generate summary for user ${userId} in guild ${guildId}`);
       return;
     }
     
-    const serverConfig = await getServerConfig(guildId);
-    const botName = serverConfig.botName || "Bri";
+    // Use the enhanced two-stage memory extraction
+    const extractedFacts = await enhancedMemoryExtraction(userId, conversationCopy, guildId);
     
-    // Use the new incremental extraction system
-    const result = await incrementalMemoryExtraction(
-      userId, 
-      guildId, 
-      conversation,
-      botName
-    );
-    
-    if (result.success) {
-      if (result.extracted > 0) {
-        logger.info(`Successfully extracted ${result.extracted} new memories for user ${userId} in guild ${guildId}`);
-      } else {
-        logger.info(`No new memories found for user ${userId} in guild ${guildId}`);
-      }
-    } else {
-      logger.error(`Error in memory extraction for user ${userId}: ${result.error}`);
+    // Also analyze the conversation for interests after summarization - with guild context
+    analyzeConversationForInterests(userId, conversation, guildId).catch(err => {
+      logger.error("Error analyzing summarized conversation for interests:", err);
+    });
+
+    // Skip DB operations if no new facts were extracted
+    if (extractedFacts.length === 0) {
+      logger.info(`No new facts extracted for user ${userId} in guild ${guildId}`);
+      return;
     }
     
-    // Also analyze the conversation for interests after extraction
-    analyzeConversationForInterests(userId, conversation, guildId).catch(err => {
-      logger.error("Error analyzing conversation for interests:", err);
-    });
+    // Insert memories with medium-high confidence
+    logger.info(`Extracted ${extractedFacts.length} new memories for user ${userId} in guild ${guildId}`);
+    
+    // Process all facts as a batch
+    const memoryObjects = extractedFacts.map(fact => ({
+      user_id: userId,
+      guild_id: guildId,
+      memory_text: fact,
+      memory_type: 'intuited',
+      category: categorizeMemory(fact),
+      confidence: 0.8,
+      source: 'conversation_extraction'
+    }));
+
+    // Get all embeddings in a single batch
+    const texts = extractedFacts;
+    const embeddings = await getBatchEmbeddings(texts);
+
+    // Add embeddings to memory objects
+    for (let i = 0; i < memoryObjects.length; i++) {
+      memoryObjects[i].embedding = embeddings[i];
+    }
+
+    // Deduplicate memories before insertion
+    const uniqueMemories = [];
+    const duplicateIndices = new Set();
+
+    // Check each memory against existing memories in the database
+    for (let i = 0; i < memoryObjects.length; i++) {
+      if (duplicateIndices.has(i)) continue; // Skip if already marked as duplicate
+      
+      const memory = memoryObjects[i];
+      const isDuplicate = await isDuplicateMemory(userId, memory.memory_text, guildId);
+      
+      if (!isDuplicate) {
+        uniqueMemories.push(memory);
+        
+        // Also check against other memories in this batch
+        for (let j = i + 1; j < memoryObjects.length; j++) {
+          if (duplicateIndices.has(j)) continue;
+          
+          const otherMemory = memoryObjects[j];
+          const similarity = natural.JaroWinklerDistance(
+            normalizeForComparison(memory.memory_text),
+            normalizeForComparison(otherMemory.memory_text)
+          );
+          
+          if (similarity > 0.92) {
+            duplicateIndices.add(j); // Mark as duplicate
+            logger.info(`Found duplicate in batch: "${memory.memory_text}" vs "${otherMemory.memory_text}"`);
+          }
+        }
+      } else {
+        duplicateIndices.add(i);
+      }
+    }
+
+    logger.info(`Filtered out ${duplicateIndices.size} duplicate memories, inserting ${uniqueMemories.length} unique memories`);
+
+    // Insert only unique memories
+    if (uniqueMemories.length > 0) {
+      try {
+        // Use onConflict strategy
+        const { data, error } = await supabase
+          .from('unified_memories')
+          .insert(uniqueMemories, {
+            onConflict: 'user_id,guild_id,memory_text',
+            ignoreDuplicates: true
+          });
+          
+        if (error) {
+          logger.error("Error batch inserting memories:", error);
+          // Fall back to individual inserts if batch fails
+          for (const memory of uniqueMemories) {
+            await insertIntuitedMemory(userId, memory.memory_text, 0.8, guildId);
+          }
+        } else {
+          logger.info(`Successfully inserted ${uniqueMemories.length} unique memories for user ${userId} in guild ${guildId}`);
+        }
+      } catch (batchError) {
+        logger.error("Error in batch memory insertion:", batchError);
+        // Fall back to individual inserts
+        for (const memory of uniqueMemories) {
+          await insertIntuitedMemory(userId, memory.memory_text, 0.8, guildId);
+        }
+      }
+    } else {
+      logger.info(`No unique memories to insert for user ${userId} in guild ${guildId}`);
+    }
   } catch (error) {
-    logger.error(`Error in summarization process: ${error}`);
+    logger.error(`Error in background summarization process: ${error}`);
   }
 }
 

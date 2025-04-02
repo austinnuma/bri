@@ -4,7 +4,7 @@ import { logger } from './logger.js';
 import { getEmbedding } from './improvedEmbeddings.js';
 import { processRetrievedMemories } from './memoryConfidence.js';
 import { enhanceMemoriesWithGraph, formatEnhancedMemoriesForPrompt } from './memoryGraphManager.js';
-import { getTemporalQueryContext, enhanceMemoriesWithTemporal, formatMemoriesWithTemporal } from './temporalMemoryUnderstanding.js';
+import { getBasicTemporalContext, getTemporalQueryContext, enhanceMemoriesWithTemporal, formatMemoriesWithTemporal } from './temporalMemoryUnderstanding.js';
 
 /**
  * Retrieves memories with enhanced graph traversal and temporal understanding
@@ -21,8 +21,10 @@ export async function retrieveMemoriesWithGraphAndTemporal(userId, query, limit 
     // Step 1: Get embedding for query
     const embedding = await getEmbedding(query);
     
-    // Step 2: Analyze query for temporal context
-    const temporalContext = await getTemporalQueryContext(query);
+    // Step 2: Use the fast non-blocking temporal context analysis
+    const temporalContext = getBasicTemporalContext(query);
+    
+    // The detailed analysis will happen asynchronously in the background
     
     // Step 3: Use the RPC function for vector search
     const { data: matches, error } = await supabase.rpc('match_unified_memories', {
@@ -125,8 +127,8 @@ export async function contextAwareMemoryRetrievalWithEnhancements(userId, curren
  */
 export async function identifyMemoryContext(userId, query, guildId) {
   try {
-    // Get temporal query context
-    const temporalContext = await getTemporalQueryContext(query);
+    // Get basic temporal query context (non-blocking)
+    const temporalContext = getBasicTemporalContext(query);
     
     // Get initial memories
     const embedding = await getEmbedding(query);

@@ -578,50 +578,94 @@ export function categorizeMemoryTimePeriod(memory) {
 }
 
 /**
- * Gets temporal context for memory retrieval based on query
+ * Gets basic temporal context for memory retrieval based on query
+ * This is a fast, non-blocking version that only uses pattern matching
+ * @param {string} query - The user's query
+ * @returns {Object} - Temporal context information
+ */
+export function getBasicTemporalContext(query) {
+  // Start with default context
+  const context = {
+    time_focus: 'present', // Default focus on current information
+    includes_time_reference: false,
+    prioritize_recent: false,
+    explicit_time_references: []
+  };
+  
+  // Check for temporal markers in the query
+  for (const marker of TEMPORAL_MARKERS) {
+    const matches = query.match(marker.marker);
+    if (matches) {
+      context.includes_time_reference = true;
+      
+      // Adjust time focus based on markers
+      if (marker.tense === 'past') {
+        context.time_focus = 'past';
+        context.prioritize_recent = false;
+      } else if (marker.tense === 'future') {
+        context.time_focus = 'future';
+        context.prioritize_recent = true; // Latest info for future planning
+      } else if (marker.tense === 'change') {
+        context.time_focus = 'changes';
+        context.prioritize_recent = true; // Focus on latest changes
+      }
+      
+      // Add explicit time references - matches is an array with the first element being the full match
+      if (matches[0] && !context.explicit_time_references.includes(matches[0])) {
+        context.explicit_time_references.push(matches[0]);
+      }
+    }
+  }
+  
+  return context;
+}
+
+/**
+ * Gets full temporal context for memory retrieval based on query
+ * This function may make API calls for detailed analysis
  * @param {string} query - The user's query
  * @returns {Promise<Object>} - Temporal context information
  */
 export async function getTemporalQueryContext(query) {
   try {
-    // Start with default context
-    const context = {
-      time_focus: 'present', // Default focus on current information
+    // Start with the basic context from pattern matching
+    const context = getBasicTemporalContext(query);
+    
+    // For complex queries, we'll still do AI-based analysis, but in a non-blocking way
+    // Returning the basic context immediately so we don't hold up the response
+    
+    // This function could be called from a background job or scheduled task
+    if (query.length > 20) {
+      // Schedule the detailed analysis for later rather than waiting for it
+      setTimeout(async () => {
+        try {
+          await performDetailedTemporalAnalysis(query, context);
+        } catch (err) {
+          logger.error("Error in background temporal analysis:", err);
+        }
+      }, 0);
+    }
+    
+    return context;
+  } catch (error) {
+    logger.error("Error getting temporal query context:", error);
+    return {
+      time_focus: 'present',
       includes_time_reference: false,
       prioritize_recent: false,
       explicit_time_references: []
     };
-    
-    // Check for temporal markers in the query
-    for (const marker of TEMPORAL_MARKERS) {
-      const matches = query.match(marker.marker);
-      if (matches) {
-        context.includes_time_reference = true;
-        
-        // Adjust time focus based on markers
-        if (marker.tense === 'past') {
-          context.time_focus = 'past';
-          context.prioritize_recent = false;
-        } else if (marker.tense === 'future') {
-          context.time_focus = 'future';
-          context.prioritize_recent = true; // Latest info for future planning
-        } else if (marker.tense === 'change') {
-          context.time_focus = 'changes';
-          context.prioritize_recent = true; // Focus on latest changes
-        }
-        
-        // Add explicit time references
-        for (const match of matches) {
-          if (!context.explicit_time_references.includes(match[0])) {
-            context.explicit_time_references.push(match[0]);
-          }
-        }
-      }
-    }
-    
-    // For more complex queries, use AI to analyze temporal focus
-    if (query.length > 20) {
-      const prompt = `
+  }
+}
+
+/**
+ * Performs detailed temporal analysis in the background without blocking
+ * @param {string} query - The user's query
+ * @param {Object} basicContext - The basic context from pattern matching
+ */
+async function performDetailedTemporalAnalysis(query, basicContext) {
+  try {
+    const prompt = `
 Analyze this query for temporal aspects:
 
 "${query}"
@@ -642,41 +686,31 @@ Format your response as JSON:
 }
 `;
 
-      const completion = await openai.chat.completions.create({
-        model: "gpt-3.5-turbo",
-        messages: [
-          { 
-            role: "system", 
-            content: "You analyze user queries for temporal aspects and time references."
-          },
-          { role: "user", content: prompt }
-        ],
-        response_format: { type: "json_object" },
-        max_tokens: 300,
-      });
-      
-      // Combine AI analysis with initial pattern matching
-      const aiContext = JSON.parse(completion.choices[0].message.content);
-      
-      return {
-        ...context,
-        ...aiContext,
-        explicit_time_references: [
-          ...context.explicit_time_references,
-          ...aiContext.explicit_time_references
-        ]
-      };
-    }
+    const completion = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [
+        { 
+          role: "system", 
+          content: "You analyze user queries for temporal aspects and time references."
+        },
+        { role: "user", content: prompt }
+      ],
+      response_format: { type: "json_object" },
+      max_tokens: 300,
+    });
     
-    return context;
+    // Process the detailed analysis, but don't block the main thread
+    // This analysis could be stored for future use or update a cache
+    const aiContext = JSON.parse(completion.choices[0].message.content);
+    logger.info("Completed detailed temporal analysis in background", {
+      query_snippet: query.substring(0, 30),
+      time_focus: aiContext.time_focus
+    });
+    
+    // Here you could store this analysis for future use
+    // For example, it could be cached or stored in the database
   } catch (error) {
-    logger.error("Error getting temporal query context:", error);
-    return {
-      time_focus: 'present',
-      includes_time_reference: false,
-      prioritize_recent: false,
-      explicit_time_references: []
-    };
+    logger.error("Error in detailed temporal analysis:", error);
   }
 }
 

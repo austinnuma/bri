@@ -1,269 +1,355 @@
-# Bri Discord Bot: Technical Documentation
+# Bri Discord Bot - Comprehensive Documentation
 
 ## Overview
-Bri is an advanced Discord bot with the persona of a 14-year-old girl. The bot provides personalized AI assistance with sophisticated memory systems, dynamic character development, relationship tracking, and journaling capabilities. It uses modern AI techniques including vector search for memory recall, LLM-based summarization, and batched API calls for efficiency.
 
-## Table of Contents
-- [Core Features](#core-features)
-- [Architecture and Systems](#architecture-and-systems)
-- [Advanced Technical Implementations](#advanced-technical-implementations)
-- [Command Reference](#command-reference)
-- [Multi-Server Support](#multi-server-support)
+Bri is a Discord bot with the persona of a friendly, 14-year-old AI assistant. She features a sophisticated memory system, character development, natural conversation abilities, and various utility functions. This document provides a comprehensive overview of Bri's architecture, features, and technical implementation to guide a complete rewrite of the codebase.
+
+## Core Personality & Character
+
+Bri presents herself as a 14-year-old girl with the following personality traits:
+- Friendly, energetic, and cheerful
+- Helpful and keen to assist users
+- Uses lighthearted humor
+- Has a naive and innocent perspective
+- Shows excitement when interacting with users
+- Asks follow-up questions to better understand users
+
+## System Architecture
+
+The bot is structured around several key components:
+
+1. **Message Handler** - The central entry point for processing user messages
+2. **Memory System** - Stores and retrieves user information
+3. **Character Development** - Manages Bri's persona and relationships with users
+4. **Command System** - Processes slash commands and regular chat commands
+5. **Time System** - Handles time-related queries and events
+6. **Credit System** - Manages usage credits for server owners
+7. **Journal System** - Manages Bri's personal journal entries
+8. **Image Processing** - Handles image analysis
+
+### Database Structure
+
+Bri uses a PostgreSQL database via Supabase with the following main tables:
+
+- `unified_memories` - Stores all user memories
+- `bri_interests` - Stores Bri's interests
+- `bri_relationships` - Tracks relationships with users
+- `bri_storyline` - Stores Bri's ongoing storylines
+- `bri_inside_jokes` - Records inside jokes with users
+- `discord_users` - Maps Discord user IDs to usernames
+- `user_timezones` - Stores user timezone preferences
+- `bri_events` - Stores upcoming events and reminders
+- `bri_scheduled_messages` - Stores scheduled messages
+- `bri_quotes` - Stores memorable quotes from users
 
 ## Core Features
 
-### Memory System
-The bot's memory system allows it to remember information about users across conversations.
+### 1. Memory System
 
-**Memory Types:**
-- **Explicit Memories**: Directly stored via the `/remember` command
-- **Intuited Memories**: Automatically extracted from conversations
+Bri's memory system is a sophisticated framework designed to store, retrieve, and understand user information through:
 
-**Memory Categories:**
-- Personal: User's name, age, family, etc.
-- Professional: Job, education, skills
-- Preferences: Likes, dislikes, favorite things
-- Hobbies: Activities, sports, collections
-- Contact: Communication methods
-- Other: Miscategorized information
+#### Memory Types
+- **Explicit Memories** - Directly stored via "remember" commands
+- **Intuited Memories** - Automatically extracted from conversations
 
-**How It Works:**
-- Memories are stored in a unified table in Supabase
-- Each memory has an embedding vector for semantic search
-- Memories include confidence scores (1.0 for explicit, lower for intuited)
-- During conversations, relevant memories are retrieved using vector similarity
-- Memory categorization uses both keyword matching and semantic analysis
+#### Memory Categories
+- Personal (name, age, background)
+- Professional (job, education)
+- Preferences (likes, dislikes)
+- Hobbies (activities, games, sports)
+- Contact (communication methods)
+- Other (miscellaneous information)
 
-### Character Development
-Bri has a dynamic character that evolves through interactions.
+#### Memory Enhancement Systems
+- **Vector Similarity** - Retrieves relevant memories using embeddings
+- **Graph Relationships** - Connects related memories
+- **Temporal Understanding** - Tracks when memories occurred
+- **Confidence Scoring** - Prioritizes reliable information
+- **Character Sheets** - Maintains comprehensive user profiles
 
-**Key Components:**
-- **Relationship Levels**: Tracks progression from Stranger → Acquaintance → Friendly → Friend → Close Friend
-- **Interests System**: Bri has interests that develop over time
-- **Storylines**: Ongoing narrative elements (science fair project, learning chess)
-- **Inside Jokes**: Detected and remembered for closer relationships
+#### Memory Workflow
+1. **Creation**: 
+   - User explicitly asks Bri to remember something
+   - Automatic extraction after message processing
+   - Categorization, embedding generation, confidence scoring
 
-**How It Works:**
-- Interests are stored with levels, facts, and associated tags
-- Storylines progress over time with automated updates
-- Relationships evolve based on interaction frequency and shared interests
-- Content shared with users is filtered based on relationship level
+2. **Retrieval**:
+   - Vector similarity search
+   - Confidence-based reranking
+   - Graph and temporal enhancement
+   - Context awareness
+   - Formatted into prompt
 
-### Journaling System
-Bri maintains a journal where she records thoughts, storyline updates, and new interests.
+3. **Maintenance**:
+   - Confidence decay over time
+   - Memory graph building
+   - Temporal analysis
+   - Character sheet updates
+   - Contradiction resolution
 
-**Journal Entry Types:**
-- Storyline updates
-- New interest discoveries
-- Interest progression
-- Daily thoughts
-- Future plans
+### 2. Message Processing
 
-**How It Works:**
-- Entries are posted to a dedicated Discord channel
-- Journal entries are AI-generated with appropriate teen vocabulary and style
-- Scheduled entries create a sense of ongoing personality
-- Entries are stored in a database with vector embeddings for searchability
+The message handler orchestrates the entire conversation flow:
 
-## Architecture and Systems
+#### Workflow
+1. **Initial Filtering**:
+   - Check if message is in designated channel
+   - Check for prefix or reply to Bri
+   - Clean message content
 
-### Database Design
-- Supabase PostgreSQL database with vector extension
-- Tables for memories, relationships, interests, storylines, and journal entries
-- Vector embeddings for semantic search capabilities
+2. **Pre-Processing**:
+   - Handle image attachments
+   - Check for explicit memory commands
+   - Update relationship data
 
-### AI Integration
-- Primary model: GPT-4o/GPT-4o-mini through OpenAI API
-- Secondary model: Google's Gemini for search-enabled responses
-- Embeddings: OpenAI's text-embedding-ada-002 for vector search
+3. **Credit Verification**:
+   - Check if server has enough credits
 
-### API Optimization
-- **Batched API Calls**: Groups embedding requests to reduce API calls
-- **Request Queueing**: Collects and processes requests in batches
-- **Embeddings Caching**: Stores frequently used embeddings to reduce costs
+4. **Context Building**:
+   - Build system prompt with memories
+   - Retrieve conversation history
+   - Apply context limits
 
-### Caching System
-- **Multi-layer Caching**: Different caches for users, memories, and general queries
-- **TTL (Time-To-Live) System**: Automatic expiration of cached data
-- **LRU Eviction**: Least Recently Used items removed when cache reaches capacity
-- **Vector Search Caching**: Optimizes expensive vector similarity searches
+5. **Response Generation**:
+   - Find relevant personal content
+   - Generate AI response with OpenAI
+   - Check for time-related information
+   - Personalize response based on relationship
 
-## Advanced Technical Implementations
+6. **Post-Processing**:
+   - Update conversation in database
+   - Deduct credits
+   - Split and send long messages
 
-### Memory Management
-The unified memory system implements several sophisticated features:
+7. **Background Processing**:
+   - Extract memories from conversation
+   - Update user information
 
-**Memory Retrieval:**
-```javascript
-export async function retrieveRelevantMemories(userId, query, limit = 5, memoryType = null, category = null, guildId) {
-  // Get embedding for query
-  const embedding = await getEmbedding(query);
-  
-  // Use cached vector search function
-  const matches = await cachedVectorSearch(userId, embedding, {
-    threshold: 0.6,
-    limit,
-    memoryType,
-    category,
-    guildId
-  });
-  
-  // Sort by confidence * distance
-  const sortedData = [...matches].sort((a, b) => 
-    (b.confidence * b.distance) - (a.confidence * a.distance)
-  );
-  
-  // Format memories with confidence indicators
-  return formattedMemories.join("\n");
-}
-```
+### 3. Character Development
 
-**Memory Categorization:**
-- Uses both keyword matching and semantic analysis
-- Includes special handling for food preferences
-- Employs fallback categorization using example-based matching
+Bri has her own personality and develops relationships with users:
 
-### Embedding Optimization
-The embedding system implements several efficiency improvements:
+#### Relationship System
+- Tracks interaction count with users
+- Maintains relationship levels (stranger to close friend)
+- Records shared interests
+- Identifies conversation topics
+- Detects and stores inside jokes
 
-**Batched Processing:**
-```javascript
-async function processEmbeddingQueue() {
-  // Take all current items from the queue
-  const batch = [...embeddingQueue];
-  embeddingQueue = [];
-  
-  // Get unique texts (some might be duplicates)
-  const uniqueTexts = [...new Set(batch.map(item => item.text))];
-  
-  // Generate embeddings for unique texts only
-  const response = await openai.embeddings.create({
-    model: "text-embedding-ada-002",
-    input: uniqueTexts,
-  });
-  
-  // Cache and resolve all promises
-  // ...
-}
-```
+#### Persona Development
+- Maintains personal interests and their importance levels
+- Creates and advances "storylines" (ongoing projects/activities)
+- Shares personal content based on relationship level
+- Personalizes messages based on relationship
 
-**Caching:**
-- Uses LRU (Least Recently Used) algorithm for cache management
-- Implements size limits to prevent memory overflow
-- Tracks usage order for efficient eviction
+#### Personalization
+- Adjusts response length based on user preference
+- Customizes humor level
+- Adapts tone (friendly, formal, casual)
 
-### Character Development System
-The character development system allows Bri to evolve through interactions:
+### 4. Command System
 
-**Interest Discovery:**
-- Analyzes conversations to identify potential new interests
-- Increases interest levels based on continued discussion
-- Creates journal entries when interests reach significant levels
+Bri supports both slash commands and natural language commands:
 
-**Relationship Progression:**
-```javascript
-async function updateRelationshipAfterInteraction(userId, messageContent, guildId) {
-  // Calculate new relationship level based on:
-  // - Interaction frequency
-  // - Interaction count
-  // - Time between interactions
-  
-  // Update conversation topics using semantic extraction
-  
-  // Store changes in database for continuity
-}
-```
+#### Slash Commands
+- `/aboutbri` - Information about Bri's interests and activities
+- `/aboutme` - View what Bri knows about the user
+- `/ask` - Ask Bri a question
+- `/clearmemories` - Clear stored memories
+- `/credits` - Check server credit balance
+- `/draw` - Generate an image
+- `/gemini` - Use Google's Gemini model
+- `/gif` - Search for a GIF
+- `/journalentry` - Create a journal entry
+- `/manualjournalentry` - Manually create a journal entry
+- `/model` - Change AI model
+- `/personality` - Customize Bri's responses
+- `/quote` - Save or recall quotes
+- `/recall` - Search through memories
+- `/remember` - Store a new memory
+- `/remind` - Set a reminder
+- `/resetprofile` - Reset user profile
+- `/schedule` - Schedule a message
+- `/serversettings` - Configure server settings
+- `/setcontext` - Set conversation context length
+- `/setprompt` - Set custom system prompt
+- `/setupjournal` - Configure journal channel
+- `/snoop` - Check Bri's perception of other users
+- `/subscription` - Manage server subscription
+- `/timezone` - Set user timezone
+- `/viewprofile` - View user profile
 
-**Personalized Response Generation:**
-- Adapts communication style based on relationship level
-- References shared interests and inside jokes with closer relationships
-- Shares more personal content with users at higher relationship levels
+#### Natural Language Commands
+- `bri remember [fact]` - Store a memory
+- `hey bri [question]` - General conversation
 
-### Conversation Summarization
-The summarization system extracts key information from conversations:
+### 5. Time System
 
-**Hierarchical Summarization:**
-```javascript
-export async function enhancedHierarchicalSummarization(conversation) {
-  // Break conversation into manageable chunks
-  const chunks = [];
-  // ...
-  
-  // Summarize each chunk individually
-  const chunkSummaries = [];
-  for (const chunk of chunks) {
-    const chunkSummary = await enhancedDirectSummarization(chunk);
-    if (chunkSummary) chunkSummaries.push(chunkSummary);
-  }
-  
-  // Combine chunk summaries into final detailed summary
-  // ...
-}
-```
+Bri understands and manages time-related information:
 
-**Preference Detection:**
-- Enhanced prompts focused on identifying both explicit and implicit preferences
-- Detects emotional reactions to topics as indicators of interest
-- Special attention to detail preservation during summarization
+#### Features
+- Extracts time and event information from messages
+- Tracks user timezones
+- Creates reminders and follow-ups
+- Sends notifications for upcoming events
+- Understands temporal context in memories
 
-### Database Caching
-The database caching system significantly improves performance:
+#### Event Types
+- Appointments
+- Deadlines
+- Birthdays
+- Meetings
+- General reminders
 
-**Cache Implementation:**
-```javascript
-class Cache {
-  constructor(maxSize = 500, ttlMs = 5 * 60 * 1000) {
-    this.maxSize = maxSize;
-    this.ttlMs = ttlMs;
-    this.cache = new Map();
-    this.keys = []; // For LRU tracking
-  }
-  
-  // Methods for get, set, has, delete with expiration and LRU management
-  // ...
-}
-```
+### 6. Credit System
 
-**Specialized Caches:**
-- User data cache: 30-minute TTL
-- Memory cache: 5-minute TTL
-- General query cache: 2-minute TTL
-- Vector search cache: Results for recent similar queries
+Bri uses a credit system to manage usage:
 
-## Command Reference
+#### Features
+- Tracks credits per server
+- Different costs for different operations
+- Credits refresh monthly
+- Premium subscriptions for unlimited usage
+- Credit checking before resource-intensive operations
 
-### Memory Commands
-- `/remember <information>` - Explicitly store a memory
-- `/recall <query>` - Retrieve relevant memories
-- `/clearmemories` - Remove all stored memories for the user
+#### Credit Usage
+- Chat messages
+- Image analysis
+- Image generation
+- Advanced memory operations
 
-### Conversation Commands
-- `/ask <question>` - Ask Bri a question with memory context
-- `/model <model_name>` - Change the underlying AI model
-- `/gemini <query>` - Use Gemini model with search capability
+### 7. Journal System
 
-### Personality Commands
-- `/personality <setting> <value>` - Adjust Bri's personality traits
-- `/setprompt <prompt>` - Set a custom system prompt
-- `/setcontext <length>` - Change conversation context length
+Bri maintains a personal journal where she shares thoughts:
 
-### Utility Commands
-- `/timezone <zone>` - Set your timezone for scheduling
-- `/remind <time> <message>` - Set a reminder
-- `/schedule <time> <message>` - Schedule a message
-- `/quote <text>` - Save a memorable quote
-- `/diagnose` - Get system diagnostics
+#### Features
+- Configurable journal channel per server
+- Automatic and manual journal entries
+- Entry generation based on Bri's interests and activities
+- Random entries on interesting topics
 
-### Journal Commands
-- `/setupjournal <channel>` - Set up journal channel
-- `/journalentry` - Trigger a journal entry (testing)
+### 8. Image Processing
 
-## Multi-Server Support
-Bri implements guild/server-specific operation for all key features:
+Bri can analyze and understand images:
 
-- **Memory Partitioning**: Each server has isolated memory storage
-- **Per-Server Relationships**: User relationship levels are tracked separately per server
-- **Server Configuration**: Customizable settings for each Discord server
-- **Guild-Specific Character**: Bri can develop different interests across servers
+#### Features
+- Processes image attachments
+- Describes image content
+- Understands context between text and images
+- Generates images via `/draw` command
 
-The multi-server architecture ensures user privacy and allows Bri to have distinct personalities and development paths on different servers.
+## Optimization Areas
+
+### Current Limitations
+
+1. **Memory Management**:
+   - Some Maps used for caching without clear expiration policy
+   - Risk of memory leaks with unbounded caches
+
+2. **Database Access**:
+   - Many individual database operations
+   - Opportunities for batch operations
+
+3. **API Usage**:
+   - Heavy reliance on OpenAI API
+   - Opportunity for more local processing
+
+4. **Error Handling**:
+   - Inconsistent error recovery strategies
+   - Some functions continue despite errors; others exit early
+
+5. **Modularity**:
+   - Code spread across many files
+   - Some overlapping functionality
+
+### Targets for Improvement
+
+1. **Caching Strategy**:
+   - Implement LRU caching with size limits
+   - Add time-based expiration for cached data
+   - Cache database queries
+
+2. **Database Optimization**:
+   - Batch database operations
+   - Implement connection pooling
+   - Use transactions for related operations
+
+3. **Modular Architecture**:
+   - Clearer separation of concerns
+   - Standardized interfaces between components
+   - Common patterns for similar operations
+
+4. **Robust Error Handling**:
+   - Standardized error handling across features
+   - Retry mechanisms for transient failures
+   - Graceful degradation when services are unavailable
+
+5. **Improved Logging**:
+   - Structured logging with context
+   - Log rotation and management
+   - Different log levels for different environments
+
+6. **Enhanced Documentation**:
+   - Inline documentation for all functions
+   - Architecture diagrams
+   - System interaction maps
+
+## Technical Stack
+
+- **Runtime**: Node.js
+- **Framework**: discord.js
+- **Database**: PostgreSQL via Supabase
+- **AI Models**: OpenAI API (GPT models)
+- **Image Processing**: OpenAI DALL-E/Vision
+- **Embeddings**: OpenAI Embeddings API
+- **Natural Language**: OpenAI/natural.js
+
+## Configuration
+
+Bri uses the following environment variables:
+
+- `DISCORD_TOKEN` - Discord bot token
+- `CLIENT_ID` - Discord client ID
+- `TEST_GUILD_ID` - Optional guild ID for testing
+- `OPENAI_API_KEY` - OpenAI API key
+- `SUPABASE_URL` - Supabase URL
+- `SUPABASE_KEY` - Supabase API key
+
+## Best Practices for Rewrite
+
+1. **Standardized Code Style**:
+   - Consistent naming conventions
+   - Standard error handling patterns
+   - Common patterns for similar operations
+
+2. **Performance First**:
+   - Batch operations where possible
+   - Optimize database queries
+   - Implement efficient caching
+
+3. **Maintainability**:
+   - Clear separation of concerns
+   - Comprehensive documentation
+   - Testable code structure
+
+4. **Security**:
+   - Validate all user inputs
+   - Secure handling of credentials
+   - Rate limiting for all operations
+
+5. **Scalability**:
+   - Design for multi-server operation
+   - Consider horizontal scaling
+   - Efficient resource usage
+
+## Conclusion
+
+Bri is a sophisticated Discord bot with a unique personality and advanced memory capabilities. The rewrite should focus on maintaining these key features while improving code organization, performance, and maintainability. The goal is to create a more robust, efficient, and extensible bot that preserves Bri's friendly character and helpful nature.
+
+
+## IMPORTANT: Notes from Creator
+- Bri is designed to primarily function in a "dedicated channel" where she will respond to every message in the channel (only from users, not bots). However, messages beginning with "hey bri" will elicit a response from her regardless of the channel. 
+- For the /draw and /gemini commands specifically, you will want to reference my current code as Claude's API knowledge is outdated for these Google services. 
+- My intent is to allow Bri to be used in a large number of servers by a large number of users at some point in the future, and her current responses already have a very large latency, so optimization is key. If this means using a technique or method to achieve something contrary to what I've been using or is outlined in this document, feel free to do so. 
+- If possible, it would be especially helpful for all variable settings to be located in one central place, or at the least clearly outlined at the beginning of the file they're used in for easy modification. 
+- When creating your code, make sure to include clear and thorough commenting explaining not only what, but why. Also make sure to include consistent logging throughout to make debugging and error solving simpler. 
