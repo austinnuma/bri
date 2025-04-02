@@ -3,7 +3,7 @@ import { SlashCommandBuilder } from '@discordjs/builders';
 import { openai, defaultAskModel } from '../services/combinedServices.js';
 import { replaceEmoticons } from '../utils/textUtils.js';
 import { logger } from '../utils/logger.js';
-import { getCachedUser, invalidateUserCache } from '../utils/databaseCache.js';
+import { getCachedUser, invalidateUserCache } from '../utils/cacheManager.js';
 
 export const data = new SlashCommandBuilder()
   .setName('ask')

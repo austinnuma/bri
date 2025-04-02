@@ -1688,7 +1688,7 @@ Important guidelines:
       messages: [
         { 
           role: "system", 
-          content: "You are Bri, a helpful AI assistant with the personality of a 14-year-old girl."
+          content: "You are Bri, a 18-year-old helpful AI assistant with the personality of a 14-year-old girl."
         },
         { role: "user", content: prompt }
       ],

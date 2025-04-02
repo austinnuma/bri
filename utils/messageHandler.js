@@ -1,4 +1,5 @@
 // Complete multi-server messageHandler.js
+
 import { 
   getEffectiveSystemPrompt, 
   getCombinedSystemPromptWithMemories, 
@@ -14,7 +15,9 @@ import {
   getUserContextLength,
   setUserConversation,
   getUserDynamicPrompt,
-  setUserDynamicPrompt
+  setUserDynamicPrompt,
+  batchGetUserSettings, // Import the batch function
+  warmupUserCache as warmupUserSettingsCache // Renamed for clarity
 } from './db/userSettings.js';
 import { splitMessage, replaceEmoticons } from './textUtils.js';
 import { openai, getChatCompletion, defaultAskModel, supabase } from '../services/combinedServices.js';
@@ -23,7 +26,13 @@ import { enhancedMemoryExtraction } from './extractionAndMemory.js';
 import { enhancedSummarizeConversation } from './summarization.js';
 import { analyzeImage, analyzeImages } from '../services/visionService.js';
 import { getBatchEmbeddings } from './improvedEmbeddings.js';
-import { getCachedUser, invalidateUserCache, warmupUserCache, cachedVectorSearch } from '../utils/databaseCache.js';
+// Renamed to avoid function name conflicts
+import { 
+  getCachedUser, 
+  invalidateUserCache as invalidateCacheManagerUserCache, 
+  warmupUserCache as warmupCacheManagerUserCache, 
+  cachedVectorSearch 
+} from './cacheManager.js';
 import { maybeAutoSaveQuote } from './quoteManager.js';
 import { 
   analyzeConversationForInterests,
@@ -99,6 +108,41 @@ function normalizeForComparison(text) {
 
 // Track which users have pending memory verifications
 const pendingVerifications = new Map();
+
+
+/**
+ * Combined function to warmup both caches for consistency
+ * @param {string} userId - User ID
+ * @param {string} guildId - Guild ID 
+ */
+async function warmupCombinedUserCache(userId, guildId) {
+  try {
+    // Warm up both caches in parallel for efficiency
+    await Promise.all([
+      warmupCacheManagerUserCache(userId, guildId),
+      warmupUserSettingsCache(userId, guildId)
+    ]);
+    logger.debug(`Warmed up all caches for user ${userId} in guild ${guildId}`);
+  } catch (error) {
+    logger.error(`Error warming up combined caches for user ${userId} in guild ${guildId}:`, error);
+  }
+}
+
+/**
+ * Combined function to invalidate both caches for consistency
+ * @param {string} userId - User ID
+ * @param {string} guildId - Guild ID
+ */
+function invalidateCombinedUserCache(userId, guildId) {
+  try {
+    // Invalidate both caches for consistency
+    invalidateCacheManagerUserCache(userId, guildId);
+    // No explicit invalidation needed for userSettings cache due to write-through approach
+    logger.debug(`Invalidated cache for user ${userId} in guild ${guildId}`);
+  } catch (error) {
+    logger.error(`Error invalidating cache for user ${userId} in guild ${guildId}:`, error);
+  }
+}
 
 
 /**
@@ -214,7 +258,7 @@ function isImageAttachment(attachment) {
 }
 
 /**
- * Handle image attachments with guild context
+ * Handle image attachments with guild context and write-through caching
  * @param {Message} message - The Discord message
  * @param {string} cleanedContent - The cleaned message content
  * @param {string} guildId - The guild ID
@@ -235,7 +279,7 @@ async function handleImageAttachments(message, cleanedContent, guildId) {
     // Get all image URLs
     const imageUrls = imageAttachments.map(attachment => attachment.url);
     
-    // Get conversation history for this user from database
+    // Get conversation history for this user using write-through cache
     let conversationHistory = await getUserConversation(message.author.id, guildId) || [];
     
     // Use the enhanced analyzeImages function with conversation context
@@ -270,10 +314,12 @@ async function handleImageAttachments(message, cleanedContent, guildId) {
         conversationHistory = [conversationHistory[0], ...conversationHistory.slice(-(contextLength - 1))];
       }
       
-      // Save the updated conversation to database
+      // Save the updated conversation using write-through caching
+      // This will update both the database and the cache simultaneously
       await setUserConversation(message.author.id, guildId, conversationHistory);
       
-      invalidateUserCache(message.author.id, guildId);
+      // No need to invalidate cache explicitly as setUserConversation uses write-through caching
+      // Remove: invalidateUserCache(message.author.id, guildId);
     }
     
     logger.info(`Successfully processed images for user ${message.author.id} in guild ${guildId}`);
@@ -314,7 +360,7 @@ export async function handleLegacyMessage(message) {
   
   // If user was inactive for more than 10 minutes, refresh their cache
   if (now - lastInteraction > 10 * 60 * 1000) {
-    await warmupUserCache(message.author.id, guildId);
+    await warmupCombinedUserCache(message.author.id, guildId);
   }
 
   // Update last active timestamp
@@ -481,48 +527,56 @@ export async function handleLegacyMessage(message) {
     guildId
   );
 
-    // Using DB functions now instead of in-memory Map objects
+  // IMPROVED: Use the batch function to get all user settings at once
+  // This reduces multiple database calls to a single call
+  const userSettings = await batchGetUserSettings(message.author.id, guildId);
   
-  // Get conversation from database
-  let conversation = await getUserConversation(message.author.id, guildId) || [
-    { role: "system", content: combinedSystemPrompt }
-  ];
+  // Extract needed values from the batch result
+  let conversation = userSettings.conversation;
+  const contextLength = userSettings.contextLength || defaultContextLength;
   
-  // Update the system prompt and add the user's message
-  conversation[0] = { role: "system", content: combinedSystemPrompt };
+  // If conversation doesn't have a system prompt, add it
+  if (!conversation || !conversation.length) {
+    conversation = [{ role: "system", content: combinedSystemPrompt }];
+  } else {
+    // Update the system prompt
+    conversation[0] = { role: "system", content: combinedSystemPrompt };
+  }
+  
+  // Add the user's message
   conversation.push({ role: "user", content: cleanedContent });
 
   // Apply context length limit
-  const contextLength = await getUserContextLength(message.author.id, guildId) || defaultContextLength;
   if (conversation.length > contextLength) {
     conversation = [conversation[0], ...conversation.slice(-(contextLength - 1))];
   }
   
-  // Save updated conversation to database instead of in-memory Map
+  // Save updated conversation to database with write-through caching
   await setUserConversation(message.author.id, guildId, conversation);
 
   await message.channel.sendTyping();
 
+
   try {
     // Find relevant content to potentially share with this user - only if character feature is enabled
-    const characterEnabled = await isFeatureEnabled(guildId, 'character');
-    const relevantContent = characterEnabled 
-      ? await findRelevantContentToShare(message.author.id, cleanedContent, guildId) 
-      : null;
+    //const characterEnabled = await isFeatureEnabled(guildId, 'character');
+    //const relevantContent = characterEnabled 
+      //? await findRelevantContentToShare(message.author.id, cleanedContent, guildId) 
+      //: null;
     
-    let personalContent = '';
-    if (relevantContent) {
-      personalContent = await getPersonalContent(message.author.id, relevantContent, guildId);
-    }
+    //let personalContent = '';
+    //if (relevantContent) {
+      //personalContent = await getPersonalContent(message.author.id, relevantContent, guildId);
+    //}
     
     // If there's personal content to share, add it to the system prompt
-    if (personalContent) {
+    //if (personalContent) {
       // Add Bri's personal content to the prompt
-      const updatedPrompt = conversation[0].content + 
-      `\n\nYou feel like sharing this personal information about yourself: ${personalContent}`;
+      //const updatedPrompt = conversation[0].content + 
+      //`\n\nYou feel like sharing this personal information about yourself: ${personalContent}`;
           
-      conversation[0] = { role: "system", content: updatedPrompt };
-    }
+      //conversation[0] = { role: "system", content: updatedPrompt };
+    //}
     
     // Use our batched version instead of direct API call
     const completion = await getChatCompletion({
@@ -555,18 +609,13 @@ export async function handleLegacyMessage(message) {
     //}
 
     // Apply emoticons
-    reply = replaceEmoticons(reply);
+    //reply = replaceEmoticons(reply);
 
     // Update conversation with Bri's response 
     conversation.push({ role: "assistant", content: reply });
     
-    // Get dynamic prompt directly from database
-    const dynamicPrompt = await getUserDynamicPrompt(message.author.id, guildId);
-    
     // Save to database directly - overwrite in-memory approach
     await setUserConversation(message.author.id, guildId, conversation);
-    
-    invalidateUserCache(message.author.id, guildId);
 
     // Update username mapping if needed
     updateUserMapping(message).catch(err => {
@@ -727,6 +776,7 @@ async function updateUserMapping(message) {
 
 /**
  * Performs summarization and memory extraction in the background.
+ * Optimized to work with write-through caching.
  * 
  * @param {string} userId - The user's ID
  * @param {Array} conversation - The conversation history
@@ -753,11 +803,28 @@ async function summarizeAndExtract(userId, conversation, guildId) {
     if (result.success) {
       if (result.extracted > 0) {
         logger.info(`Successfully extracted ${result.extracted} new memories for user ${userId} in guild ${guildId}`);
+        
+        // If we have the memory graph system available, build connections for the latest memories
+        if (typeof buildMemoryGraph === 'function') {
+          try {
+            // This function is imported from memoryGraphInitializer.js
+            const { buildMemoryGraph } = await import('./memoryGraphInitializer.js');
+            
+            // Build graph connections for this user's recent memories
+            buildMemoryGraph(userId, guildId, null, 5).then(graphResult => {
+              logger.info(`Memory graph building complete for user ${userId} in guild ${guildId}: ${JSON.stringify(graphResult)}`);
+            }).catch(err => {
+              logger.error(`Error in memory graph building: ${err}`);
+            });
+          } catch (importError) {
+            logger.warn(`Could not import memory graph functions: ${importError}`);
+          }
+        }
       } else {
         logger.info(`No new memories found for user ${userId} in guild ${guildId}`);
       }
     } else {
-      logger.error(`Error in memory extraction for user ${userId}: ${result.error}`);
+      logger.error(`Error in memory extraction for user ${userId} in guild ${guildId}: ${result.error}`);
     }
     
     // Also analyze the conversation for interests after extraction

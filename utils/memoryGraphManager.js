@@ -333,16 +333,18 @@ Identify if there are any of these relationships between them:
 7. PART_OF: Memory B is part of a larger concept in Memory A
 
 Format your response as JSON:
-[
-  {
-    "relationship_type": "RELATIONSHIP_NAME",
-    "confidence": 0.7,
-    "explanation": "Brief explanation of why this relationship exists"
-  }
-]
+{
+  "relationships": [
+    {
+      "relationship_type": "RELATIONSHIP_NAME",
+      "confidence": 0.7,
+      "explanation": "Brief explanation of why this relationship exists"
+    }
+  ]
+}
 
 Only include relationships that are clearly present with confidence > 0.5.
-If there are no clear relationships, return an empty array: []
+If there are no clear relationships, return {"relationships": []}
 `;
 
     const completion = await openai.chat.completions.create({
@@ -358,15 +360,46 @@ If there are no clear relationships, return an empty array: []
       max_tokens: 500,
     });
     
-    // Parse the response
-    const relationships = JSON.parse(completion.choices[0].message.content);
-    
-    // Map OpenAI's output to our relationship types
-    return relationships.map(rel => ({
-      relationship_type: RELATIONSHIP_TYPES[rel.relationship_type] || RELATIONSHIP_TYPES.RELATED_TO,
-      confidence: rel.confidence,
-      explanation: rel.explanation
-    }));
+    // Parse the response with error handling
+    try {
+      const parsedResponse = JSON.parse(completion.choices[0].message.content);
+      
+      // Handle different possible response formats
+      let relationships = [];
+      
+      if (parsedResponse && typeof parsedResponse === 'object') {
+        // Check if the response has a "relationships" array
+        if (Array.isArray(parsedResponse.relationships)) {
+          relationships = parsedResponse.relationships;
+        } 
+        // Check if the response itself is an array
+        else if (Array.isArray(parsedResponse)) {
+          relationships = parsedResponse;
+        } 
+        // Last resort: look for any array property
+        else {
+          for (const key in parsedResponse) {
+            if (Array.isArray(parsedResponse[key])) {
+              relationships = parsedResponse[key];
+              break;
+            }
+          }
+        }
+      }
+      
+      // Ensure relationships is an array before mapping
+      relationships = Array.isArray(relationships) ? relationships : [];
+      
+      // Map OpenAI's output to our relationship types
+      return relationships.map(rel => ({
+        relationship_type: RELATIONSHIP_TYPES[rel.relationship_type] || RELATIONSHIP_TYPES.RELATED_TO,
+        confidence: rel.confidence || 0.6,
+        explanation: rel.explanation || "Related information"
+      }));
+    } catch (parseError) {
+      logger.error("Error parsing relationship analysis response:", parseError);
+      return []; // Return empty array on parse error
+    }
   } catch (error) {
     logger.error("Error analyzing memory relationships:", error);
     return [];
@@ -797,7 +830,7 @@ export function formatEnhancedMemoriesForPrompt(enhancedMemories) {
  * Schedule regular memory graph building
  * @param {number} intervalHours - Hours between runs
  */
-export function scheduleMemoryGraphBuilding(intervalHours = 24) {
+export function scheduleMemoryGraphBuilding(intervalHours = 0.1) {
   const intervalMs = intervalHours * 60 * 60 * 1000;
   
   setInterval(async () => {

@@ -8,7 +8,7 @@ import { logger } from './utils/logger.js';
 import { handleLegacyMessage } from './utils/messageHandler.js';
 import { createMemory, MemoryTypes, MemoryCategories } from './utils/unifiedMemoryManager.js';
 import { supabase } from './services/combinedServices.js';
-import { getCacheStats, getCachedUser, getCachedMemories, warmupUserCache } from './utils/databaseCache.js';
+import { getCacheStats, getCachedUser, getCachedMemories, warmupUserCache } from './utils/cacheManager.js';
 import { ensureQuoteTableExists } from './utils/quoteManager.js';
 import { handleReactionAdd } from './utils/reactionHandler.js';
 import { initializeCharacterDevelopment, advanceStorylinesPeriodicTask } from './utils/characterDevelopment.js';
