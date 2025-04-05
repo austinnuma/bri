@@ -345,10 +345,19 @@ Format your response as JSON with two main objects:
       max_tokens: 3000,
     });
     
-    const result = JSON.parse(completion.choices[0].message.content);
+    let result;
+    try {
+      result = JSON.parse(completion.choices[0].message.content);
+    } catch (parseError) {
+      logger.error("Error parsing JSON from OpenAI response:", parseError);
+      logger.debug("Problematic JSON content:", completion.choices[0].message.content);
+      
+      // Return the current sheet and routine if parsing fails
+      return { sheet: currentSheet, routine: currentRoutine };
+    }
     
     // Log the rationale to understand what was changed
-    logger.info(`Character sheet update rationale: ${result.rationale}`);
+    logger.info(`Character sheet update rationale: ${result.rationale || "No rationale provided"}`);
     
     return {
       sheet: result.updatedSheet,
@@ -555,7 +564,18 @@ Format your response as JSON:
       response_format: { type: "json_object" }
     });
     
-    return JSON.parse(completion.choices[0].message.content);
+    try {
+      return JSON.parse(completion.choices[0].message.content);
+    } catch (parseError) {
+      logger.error("Error parsing JSON from interest journal entry:", parseError);
+      logger.debug("Problematic JSON content:", completion.choices[0].message.content);
+      
+      // Return a fallback entry instead of rethrowing
+      return {
+        title: `My Latest Obsessions and Interests`,
+        content: `I've been getting into some new things lately and also really diving deeper into stuff I already liked. ${newInterests.length > 0 ? `I just started getting into ${newInterests.map(i => i.interest_name).join(', ')}!` : ''} ${updatedInterests.length > 0 ? `I'm also getting more and more into ${updatedInterests.map(i => i.interest_name).join(', ')}.` : ''} It's so fun having new things to learn about!`
+      };
+    }
   } catch (error) {
     logger.error("Error generating consolidated interest journal entry:", error);
     // Return a fallback entry
@@ -1744,7 +1764,20 @@ Format your response as JSON:
       response_format: { type: "json_object" }
     });
     
-    return JSON.parse(completion.choices[0].message.content);
+    try {
+      return JSON.parse(completion.choices[0].message.content);
+    } catch (parseError) {
+      logger.error(`Error parsing JSON from special event journal entry for guild ${guildId}:`, parseError);
+      logger.debug("Problematic JSON content:", completion.choices[0].message.content);
+      
+      // Return a fallback entry
+      return {
+        title: eventDetails.special_event === 'birthday' ? `Turning ${eventDetails.new_age}!` : "Special Day",
+        content: eventDetails.special_event === 'birthday' ? 
+          `Today was my birthday and I turned ${eventDetails.new_age}! It was pretty special. I can't believe I'm ${eventDetails.new_age} already. Time flies so fast! I got some nice gifts and messages from everyone. It made me feel really happy and loved. Can't wait to see what this year brings!` :
+          "Today was a special day! I'm writing to remember it because it felt important. Sometimes things change and you have to just go with it. I have a feeling things are going to be different from now on, but in a good way."
+      };
+    }
   } catch (error) {
     logger.error(`Error generating special event journal entry for guild ${guildId}:`, error);
     return null;
