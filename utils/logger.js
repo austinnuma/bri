@@ -1,7 +1,7 @@
 import winston from 'winston';
 
 export const logger = winston.createLogger({
-    level: 'debug', // Log level (e.g., 'error', 'warn', 'info', 'debug')
+    level: 'error', // Log level (e.g., 'error', 'warn', 'info', 'debug')
     format: winston.format.combine(
       winston.format.timestamp(),
       winston.format.json()
