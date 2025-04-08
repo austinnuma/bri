@@ -342,6 +342,16 @@ export async function handleLegacyMessage(message) {
   // Get guild ID for multi-server support
   const guildId = message.guild.id;
   
+  // Check if user is blocked
+  const { isUserBlocked } = await import('./moderation/userBlocker.js');
+  const { isBlocked, reason } = await isUserBlocked(message.author.id, guildId);
+  
+  // If user is blocked, silently ignore their message
+  if (isBlocked) {
+    logger.debug(`Blocked user ${message.author.id} attempted to interact in guild ${guildId}. Reason: ${reason}`);
+    return;
+  }
+  
   // Get server configuration
   const serverConfig = await getServerConfig(guildId);
   const serverPrefix = serverConfig.prefix || 'bri';
@@ -358,10 +368,8 @@ export async function handleLegacyMessage(message) {
     integrateMemoryEnhancements(message.client);
   }
   
-  // If user was inactive for more than 10 minutes, refresh their cache
-  if (now - lastInteraction > 10 * 60 * 1000) {
-    await warmupCombinedUserCache(message.author.id, guildId);
-  }
+  // We'll only warm up the cache when Bri is explicitly invoked
+  // This will be handled later after we check if the message is directed at Bri
 
   // Update last active timestamp
   userLastActive.set(userGuildKey, now);
@@ -413,6 +421,9 @@ export async function handleLegacyMessage(message) {
       return; // Skip this message
     }
     
+    // Bri is being explicitly invoked, warm up the cache
+    await warmupCombinedUserCache(message.author.id, guildId);
+    
     // Clean the content if it has the prefix
     if (hasPrefix) {
       cleanedContent = message.content.replace(prefixRegex, '').trim();
@@ -422,6 +433,9 @@ export async function handleLegacyMessage(message) {
     if (message.content.startsWith('::')) {
       return; // Silently ignore these messages
     }
+    
+    // This is a designated channel, so Bri is being explicitly invoked, warm up the cache
+    await warmupCombinedUserCache(message.author.id, guildId);
   }
   
  // Handle image analysis if feature is enabled

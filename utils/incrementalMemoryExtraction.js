@@ -6,7 +6,9 @@ import { categorizeMemory, MemoryTypes } from './unifiedMemoryManager.js';
 import { getBatchEmbeddings } from './improvedEmbeddings.js';
 import { calculateInitialConfidence } from './memoryConfidence.js';
 import { semanticDeduplication } from './memoryDeduplication.js';
-import { enhancedMemoryExtraction } from './extractionAndMemory.js';
+// Import with individual variables to avoid any potential import issues
+import * as extractionFunctions from './extractionAndMemory.js';
+const { enhancedMemoryExtraction, postProcessExtractedFacts, extractExplicitFacts, extractImpliedPreferences } = extractionFunctions;
 
 /**
  * Tracks conversations to enable incremental processing
@@ -310,6 +312,22 @@ const extractedFacts = await extractFactsFromSegment(userId, processSegment, gui
  */
 async function extractFactsFromSegment(userId, segment, guildId, botName, summary) {
     try {
+      // Check that required functions are properly imported
+      if (typeof extractExplicitFacts !== 'function') {
+        logger.error(`extractExplicitFacts is not a function, value: ${extractExplicitFacts}`);
+        throw new Error('extractExplicitFacts is not properly imported');
+      }
+      
+      if (typeof extractImpliedPreferences !== 'function') {
+        logger.error(`extractImpliedPreferences is not a function, value: ${extractImpliedPreferences}`);
+        throw new Error('extractImpliedPreferences is not properly imported');
+      }
+      
+      if (typeof postProcessExtractedFacts !== 'function') {
+        logger.error(`postProcessExtractedFacts is not a function, value: ${postProcessExtractedFacts}`);
+        throw new Error('postProcessExtractedFacts is not properly imported');
+      }
+      
       // Use the summary we already generated to extract facts
       // This avoids calling enhancedMemoryExtraction which would summarize again
       

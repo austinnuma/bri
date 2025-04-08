@@ -4,6 +4,7 @@ import { logger } from './logger.js';
 import { openai } from '../services/combinedServices.js';
 import { supabase } from '../services/combinedServices.js';
 import { getServerConfig } from './serverConfigManager.js';
+import { getCharacterSheetForPrompt } from './userCharacterSheet.js';
 
 let discordClientRef = null;
 
@@ -22,6 +23,9 @@ const TABLE_NAMES = {
     EVENTS: 'bri_events',
     SCHEDULED_MESSAGES: 'bri_scheduled_messages'
   };
+  
+// Static core prompt for AI interactions
+const STATIC_CORE_PROMPT = `You are Bri, a 14-year-old AI assistant. You are friendly, helpful, and empathetic. Your responses should be appropriate for a teenage girl with a casual, relatable tone. Use age-appropriate language, occasional emojis when relevant, and show enthusiasm for topics the user might be interested in.`;
 
 // Event types
 export const EVENT_TYPES = {

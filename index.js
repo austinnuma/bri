@@ -189,8 +189,8 @@ async function warmupActiveCaches() {
   }
 }
 
-// Run every 2 hours
-setInterval(warmupActiveCaches, 2 * 60 * 60 * 1000);
+// Disabled periodic cache warmup to only warm cache on direct interaction
+// setInterval(warmupActiveCaches, 2 * 60 * 60 * 1000);
 
 
 
@@ -362,6 +362,15 @@ async function testDatabaseAccess() {
 client.once('ready', async () => {
   logger.info(`Logged in as ${client.user.tag}!`);
   
+  // Initialize user blocking system
+  try {
+    const { initializeUserBlockingSystem } = await import('./utils/moderation/userBlocker.js');
+    await initializeUserBlockingSystem();
+    logger.info("User blocking system initialized");
+  } catch (error) {
+    logger.error("Error initializing user blocking system:", error);
+  }
+  
   // Initialize credit system
   try {
     await initializeCreditSystem();
@@ -499,8 +508,32 @@ client.on('interactionCreate', async interaction => {
   }
 
   if (!interaction.isCommand()) return;
+  
+  // Skip blocked user check for the blockuser command itself
+  if (interaction.commandName !== 'blockuser' && interaction.guildId) {
+    try {
+      // Import the user blocker dynamically
+      const { isUserBlocked } = await import('./utils/moderation/userBlocker.js');
+      
+      // Check if the user is blocked
+      const { isBlocked, reason } = await isUserBlocked(interaction.user.id, interaction.guildId);
+      
+      // If user is blocked, respond with a ephemeral message and return
+      if (isBlocked) {
+        logger.debug(`Blocked user ${interaction.user.id} attempted to use command ${interaction.commandName} in guild ${interaction.guildId}`);
+        await interaction.reply({ 
+          content: "❌ You have been blocked from interacting with Bri.", 
+          ephemeral: true 
+        });
+        return;
+      }
+    } catch (error) {
+      logger.error(`Error checking if user is blocked: ${error}`);
+      // Continue with command execution if there's an error checking block status
+    }
+  }
 
-  // Warm up cache for this user - now with guild ID
+  // Warm up cache for this user - only for commands, which is explicit user interaction
   try {
     // Make sure we have a guild ID (interaction.guildId should be available for guild interactions)
     if (interaction.guildId) {

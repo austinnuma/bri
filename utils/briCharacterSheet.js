@@ -342,7 +342,7 @@ Format your response as JSON with two main objects:
         { role: "user", content: prompt }
       ],
       response_format: { type: "json_object" },
-      max_tokens: 3000,
+      max_tokens: 4000, // Increased from 3000 to 4000 to handle larger responses
     });
     
     let result;
@@ -350,10 +350,82 @@ Format your response as JSON with two main objects:
       result = JSON.parse(completion.choices[0].message.content);
     } catch (parseError) {
       logger.error("Error parsing JSON from OpenAI response:", parseError);
-      logger.debug("Problematic JSON content:", completion.choices[0].message.content);
       
-      // Return the current sheet and routine if parsing fails
-      return { sheet: currentSheet, routine: currentRoutine };
+      // Attempt to fix common JSON parsing issues
+      let fixedContent = completion.choices[0].message.content;
+      
+      // Log the problematic position
+      if (parseError.message && parseError.message.includes("position")) {
+        const posMatch = parseError.message.match(/position (\d+)/);
+        if (posMatch && posMatch[1]) {
+          const errorPos = parseInt(posMatch[1]);
+          const errorContext = fixedContent.substring(
+            Math.max(0, errorPos - 50),
+            Math.min(fixedContent.length, errorPos + 50)
+          );
+          logger.debug(`Error context around position ${errorPos}: "${errorContext}"`);
+        }
+      }
+      
+      // Try to fix unterminated strings by adding closing quotes
+      if (parseError.message && parseError.message.includes("Unterminated string")) {
+        // Find all opening quotes without matching closing quotes
+        let inString = false;
+        let inEscape = false;
+        let braceCount = 0;
+        let lastOpenQuote = -1;
+        
+        for (let i = 0; i < fixedContent.length; i++) {
+          const char = fixedContent[i];
+          
+          if (inString) {
+            if (char === '\\' && !inEscape) {
+              inEscape = true;
+            } else if (char === '"' && !inEscape) {
+              inString = false;
+            } else {
+              inEscape = false;
+            }
+          } else {
+            if (char === '"') {
+              inString = true;
+              lastOpenQuote = i;
+            } else if (char === '{') {
+              braceCount++;
+            } else if (char === '}') {
+              braceCount--;
+            }
+          }
+        }
+        
+        // If we're still in a string at the end, that's our unterminated string
+        if (inString) {
+          logger.info(`Attempting to fix unterminated string by adding closing quote at the end`);
+          fixedContent += '"';
+          
+          // If we're missing the final closing brace(s), add them too
+          while (braceCount > 0) {
+            fixedContent += '}';
+            braceCount--;
+          }
+          
+          // Try to parse the fixed content
+          try {
+            result = JSON.parse(fixedContent);
+            logger.info("Successfully fixed JSON by adding closing quote");
+          } catch (fixError) {
+            logger.error("Failed to fix JSON even after adding closing quote:", fixError);
+            logger.debug("Problematic JSON content:", completion.choices[0].message.content);
+            return { sheet: currentSheet, routine: currentRoutine };
+          }
+        } else {
+          logger.debug("Problematic JSON content:", completion.choices[0].message.content);
+          return { sheet: currentSheet, routine: currentRoutine };
+        }
+      } else {
+        logger.debug("Problematic JSON content:", completion.choices[0].message.content);
+        return { sheet: currentSheet, routine: currentRoutine };
+      }
     }
     
     // Log the rationale to understand what was changed
@@ -560,7 +632,7 @@ Format your response as JSON:
         },
         { role: "user", content: prompt }
       ],
-      max_tokens: 1000,
+      max_tokens: 2000, // Increased from 1000 to 2000 to handle larger responses
       response_format: { type: "json_object" }
     });
     
@@ -568,6 +640,59 @@ Format your response as JSON:
       return JSON.parse(completion.choices[0].message.content);
     } catch (parseError) {
       logger.error("Error parsing JSON from interest journal entry:", parseError);
+      
+      // Attempt to fix common JSON parsing issues
+      let fixedContent = completion.choices[0].message.content;
+      
+      // Fix unterminated strings
+      if (parseError.message && parseError.message.includes("Unterminated string")) {
+        logger.info("Attempting to fix unterminated string in interest journal entry");
+        
+        // Track string and brace state
+        let inString = false;
+        let inEscape = false;
+        let braceCount = 0;
+        
+        for (let i = 0; i < fixedContent.length; i++) {
+          const char = fixedContent[i];
+          
+          if (inString) {
+            if (char === '\\' && !inEscape) {
+              inEscape = true;
+            } else if (char === '"' && !inEscape) {
+              inString = false;
+            } else {
+              inEscape = false;
+            }
+          } else {
+            if (char === '"') {
+              inString = true;
+            } else if (char === '{') {
+              braceCount++;
+            } else if (char === '}') {
+              braceCount--;
+            }
+          }
+        }
+        
+        // Add missing quotes and braces
+        if (inString) {
+          fixedContent += '"';
+        }
+        
+        while (braceCount > 0) {
+          fixedContent += '}';
+          braceCount--;
+        }
+        
+        // Try to parse the fixed content
+        try {
+          return JSON.parse(fixedContent);
+        } catch (fixError) {
+          logger.error("Failed to fix JSON even after adding closing quotes/braces");
+        }
+      }
+      
       logger.debug("Problematic JSON content:", completion.choices[0].message.content);
       
       // Return a fallback entry instead of rethrowing
@@ -739,7 +864,7 @@ export async function generateContextualJournalEntry(guildId, currentTime = new 
           },
           { role: "user", content: prompt }
         ],
-        max_tokens: 1000,
+        max_tokens: 2000, // Increased from 1000 to 2000 to handle larger responses
         response_format: { type: "json_object" }
       });
       
@@ -747,14 +872,80 @@ export async function generateContextualJournalEntry(guildId, currentTime = new 
         // Try to parse the JSON response
         return JSON.parse(completion.choices[0].message.content);
       } catch (parseError) {
-        // If JSON parsing fails, try to extract title and content using regex
-        logger.warn(`JSON parsing failed for journal entry, attempting regex extraction: ${parseError}`);
+        // If JSON parsing fails, first try to fix common issues
+        logger.warn(`JSON parsing failed for journal entry: ${parseError.message}`);
         
+        let fixedContent = completion.choices[0].message.content;
+        
+        // Log the problematic position if available
+        if (parseError.message && parseError.message.includes("position")) {
+          const posMatch = parseError.message.match(/position (\d+)/);
+          if (posMatch && posMatch[1]) {
+            const errorPos = parseInt(posMatch[1]);
+            const errorContext = fixedContent.substring(
+              Math.max(0, errorPos - 30),
+              Math.min(fixedContent.length, errorPos + 30)
+            );
+            logger.debug(`Error context around position ${errorPos}: "${errorContext}"`);
+          }
+        }
+        
+        // Fix unterminated strings
+        if (parseError.message && parseError.message.includes("Unterminated string")) {
+          logger.info("Attempting to fix unterminated string in journal entry");
+          
+          // Track string and brace state
+          let inString = false;
+          let inEscape = false;
+          let braceCount = 0;
+          
+          for (let i = 0; i < fixedContent.length; i++) {
+            const char = fixedContent[i];
+            
+            if (inString) {
+              if (char === '\\' && !inEscape) {
+                inEscape = true;
+              } else if (char === '"' && !inEscape) {
+                inString = false;
+              } else {
+                inEscape = false;
+              }
+            } else {
+              if (char === '"') {
+                inString = true;
+              } else if (char === '{') {
+                braceCount++;
+              } else if (char === '}') {
+                braceCount--;
+              }
+            }
+          }
+          
+          // Add missing quotes and braces
+          if (inString) {
+            fixedContent += '"';
+          }
+          
+          while (braceCount > 0) {
+            fixedContent += '}';
+            braceCount--;
+          }
+          
+          // Try to parse the fixed content
+          try {
+            return JSON.parse(fixedContent);
+          } catch (fixError) {
+            logger.error("Failed to fix JSON even after adding closing quotes/braces");
+          }
+        }
+        
+        // If fixing failed, try regex as fallback
+        logger.warn(`Attempting regex extraction as fallback`);
         const content = completion.choices[0].message.content;
         
         // Try to match JSON-like structure with regex
         const titleMatch = content.match(/"title"\s*:\s*"([^"]+)"/);
-        const contentMatch = content.match(/"content"\s*:\s*"([^"]*)"/);
+        const contentMatch = content.match(/"content"\s*:\s*"(.*?)("\s*}|\s*"\s*,)/s);
         
         if (titleMatch && contentMatch) {
           return {
@@ -1760,7 +1951,7 @@ Format your response as JSON:
         },
         { role: "user", content: prompt }
       ],
-      max_tokens: 1000,
+      max_tokens: 2000, // Increased from 1000 to 2000 to handle larger responses
       response_format: { type: "json_object" }
     });
     
@@ -1768,6 +1959,59 @@ Format your response as JSON:
       return JSON.parse(completion.choices[0].message.content);
     } catch (parseError) {
       logger.error(`Error parsing JSON from special event journal entry for guild ${guildId}:`, parseError);
+      
+      // Attempt to fix common JSON parsing issues
+      let fixedContent = completion.choices[0].message.content;
+      
+      // Fix unterminated strings
+      if (parseError.message && parseError.message.includes("Unterminated string")) {
+        logger.info("Attempting to fix unterminated string in special event journal entry");
+        
+        // Track string and brace state
+        let inString = false;
+        let inEscape = false;
+        let braceCount = 0;
+        
+        for (let i = 0; i < fixedContent.length; i++) {
+          const char = fixedContent[i];
+          
+          if (inString) {
+            if (char === '\\' && !inEscape) {
+              inEscape = true;
+            } else if (char === '"' && !inEscape) {
+              inString = false;
+            } else {
+              inEscape = false;
+            }
+          } else {
+            if (char === '"') {
+              inString = true;
+            } else if (char === '{') {
+              braceCount++;
+            } else if (char === '}') {
+              braceCount--;
+            }
+          }
+        }
+        
+        // Add missing quotes and braces
+        if (inString) {
+          fixedContent += '"';
+        }
+        
+        while (braceCount > 0) {
+          fixedContent += '}';
+          braceCount--;
+        }
+        
+        // Try to parse the fixed content
+        try {
+          return JSON.parse(fixedContent);
+        } catch (fixError) {
+          logger.error("Failed to fix JSON even after adding closing quotes/braces");
+        }
+      }
+      
       logger.debug("Problematic JSON content:", completion.choices[0].message.content);
       
       // Return a fallback entry

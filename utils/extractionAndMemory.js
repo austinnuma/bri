@@ -15,7 +15,7 @@ import { semanticDeduplication } from './memoryDeduplication.js';
  * @param {string} botName - The name of the bot (e.g., "Bri")
  * @returns {Array<string>} - Filtered and improved facts
  */
-function postProcessExtractedFacts(facts, botName = "Bri") {
+export function postProcessExtractedFacts(facts, botName = "Bri") {
   // Convert bot name to lowercase for case-insensitive comparison
   const botNameLower = botName.toLowerCase();
   
@@ -153,7 +153,7 @@ export async function enhancedMemoryExtraction(userId, conversation, guildId, bo
  * @param {string} botName - Name of the bot (default: "Bri")
  * @returns {Promise<Array<string>>} - Extracted explicit facts
  */
-async function extractExplicitFacts(summary, botName = "Bri") {
+export async function extractExplicitFacts(summary, botName = "Bri") {
   const explicitPrompt = `
 Extract ONLY clearly stated, explicit facts about the user from this conversation summary.
 Focus on biographical information, concrete details, and directly stated preferences.
@@ -220,7 +220,7 @@ SUMMARY: ${summary}`;
  * @param {string} botName - Name of the bot (default: "Bri")
  * @returns {Promise<Array<string>>} - Extracted implied preferences
  */
-async function extractImpliedPreferences(summary, conversation, botName = "Bri") {
+export async function extractImpliedPreferences(summary, conversation, botName = "Bri") {
   // Extract user messages for context
   const userMessages = conversation
     .filter(msg => msg.role === "user")
