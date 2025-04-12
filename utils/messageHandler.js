@@ -403,17 +403,15 @@ export async function handleLegacyMessage(message) {
   // Check for attached images and store the result
   const imageAttachments = message.attachments.filter(isImageAttachment);
   
-  // Check if this is a non-designated channel
-  if (!isDesignated) {
-    // Build the prefix regex based on server configuration
-    const prefixRegex = new RegExp(`^(hey\\s+)?${serverPrefix}+\\b`, 'i');
-    
-    // Check if this is a reply to the bot's message
-    const isReplyToBot = message.reference && 
-                          message.reference.messageId && 
-                          (await message.channel.messages.fetch(message.reference.messageId))?.author.id === message.client.user.id;
-    
-  // Adding RepliedToMessageContext for better context in replies
+  // Build the prefix regex based on server configuration
+  const prefixRegex = new RegExp(`^(hey\\s+)?${serverPrefix}+\\b`, 'i');
+  
+  // Check if this is a reply to the bot's message - moved outside the isDesignated check
+  const isReplyToBot = message.reference && 
+                        message.reference.messageId && 
+                        (await message.channel.messages.fetch(message.reference.messageId))?.author.id === message.client.user.id;
+  
+  // Adding RepliedToMessageContext for better context in replies - moved outside the isDesignated check
   if (message.reference && message.reference.messageId) {
     try {
       // Fetch the message being replied to
@@ -457,7 +455,7 @@ export async function handleLegacyMessage(message) {
         }
         
         // Format the context information more clearly
-        repliedToMessageContext = `REPLIED_TO_MESSAGE: User ${repliedToAuthor} posted: "${repliedToContent}${attachmentInfo}"`;
+        repliedToMessageContext = `CONTEXT_FROM_REPLIED_MESSAGE: This message is replying to content from user ${repliedToAuthor} who said: "${repliedToContent}${attachmentInfo}"`;
         
         logger.info(`Added reply context to message from ${message.author.id} in guild ${guildId}. Original message from ${repliedToAuthor}`);
       }
@@ -466,13 +464,17 @@ export async function handleLegacyMessage(message) {
       // Continue processing even if we can't fetch the reply
     }
   }
-
+  
+  // Define prefix check for use in both designated and non-designated channels
+  const hasPrefix = prefixRegex.test(message.content);
+  const hasImageWithPrefix = imageAttachments.size > 0 && hasPrefix;
+  
+  // Check if this is a non-designated channel
+  if (!isDesignated) {
     // Only proceed in three cases:
     // 1. Message has the server-specific prefix, or
     // 2. Message is a direct reply to the bot, or
     // 3. Message has BOTH an image AND the server-specific prefix
-    const hasPrefix = prefixRegex.test(message.content);
-    const hasImageWithPrefix = imageAttachments.size > 0 && hasPrefix;
     
     if (!hasPrefix && !isReplyToBot && !hasImageWithPrefix) {
       return; // Skip this message
@@ -629,11 +631,12 @@ export async function handleLegacyMessage(message) {
     
     // Add instructions to the system prompt about how to handle replies
     if (conversation[0] && conversation[0].role === "system") {
-      conversation[0].content += `\n\nWhen you see a line starting with "REPLIED_TO_MESSAGE:", this indicates the user is replying to another user's message. ` +
+      conversation[0].content += `\n\nWhen you see a line starting with "CONTEXT_FROM_REPLIED_MESSAGE:", this indicates the user is replying to another user's message. ` +
         `Pay special attention to this context, as the user is likely referring to or asking about the content of that message. ` +
-        `You may reference the original poster by name and content in your response. ` +
-        `For example, if Max posted "cats are nocturnal" and Austin asks you "is this true?", you can respond ` +
-        `with something like "No, Max's statement that cats are nocturnal is not entirely accurate."`;
+        `You should ALWAYS reference the original message and its author in your response, even if not directly asked about them. ` +
+        `For example, if Max posted "cats are nocturnal" and Austin asks you "is this true?", your response should include something ` +
+        `like "No, Max's statement that cats are nocturnal is not entirely accurate because..." ` +
+        `Remember that the user wants you to analyze, evaluate, or respond to the content of the original message they are replying to.`;
     }
   }
 
