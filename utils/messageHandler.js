@@ -377,6 +377,9 @@ export async function handleLegacyMessage(message) {
   const isDesignated = serverConfig.designated_channels.includes(message.channel.id);
   let cleanedContent = message.content;
 
+  // Initialize reply context variable
+  let repliedToMessageContext = null;
+
    // Check if this is a response to a verification question
    if (pendingVerifications.has(userGuildKey)) {
      const verification = pendingVerifications.get(userGuildKey);
@@ -410,6 +413,32 @@ export async function handleLegacyMessage(message) {
                           message.reference.messageId && 
                           (await message.channel.messages.fetch(message.reference.messageId))?.author.id === message.client.user.id;
     
+  // Adding RepliedToMessageContext for better context in replies
+  if (message.reference && message.reference.messageId) {
+    try {
+      // Fetch the message being replied to
+      const repliedToMessage = await message.channel.messages.fetch(message.reference.messageId);
+      
+      // Skip if it's a reply to the bot (already handled by isReplyToBot)
+      if (repliedToMessage.author.id !== message.client.user.id) {
+        const repliedToAuthor = repliedToMessage.author.username;
+        const repliedToContent = repliedToMessage.content;
+        
+        // Handle attachments if they exist
+        const attachmentInfo = repliedToMessage.attachments.size > 0 ? 
+          ` [Attached ${repliedToMessage.attachments.size} ${repliedToMessage.attachments.size === 1 ? 'file' : 'files'}]` : '';
+        
+        // Format the context information
+        repliedToMessageContext = `This is in reply to a message from ${repliedToAuthor} who said: "${repliedToContent}${attachmentInfo}"`;
+        
+        logger.info(`Added reply context to message from ${message.author.id} in guild ${guildId}. Original message from ${repliedToAuthor}`);
+      }
+    } catch (error) {
+      logger.error(`Error fetching replied-to message: ${error}`);
+      // Continue processing even if we can't fetch the reply
+    }
+  }
+
     // Only proceed in three cases:
     // 1. Message has the server-specific prefix, or
     // 2. Message is a direct reply to the bot, or
@@ -559,6 +588,16 @@ export async function handleLegacyMessage(message) {
   
   // Add the user's message
   conversation.push({ role: "user", content: cleanedContent });
+
+  // If we have context from a replied-to message, append it to the user's message
+  if (repliedToMessageContext) {
+  // Get the index of the message we just added
+    const lastMessageIndex = conversation.length - 1;
+  
+    // Append the reply context to the user's message
+    conversation[lastMessageIndex].content = 
+    `${conversation[lastMessageIndex].content}\n\n(${repliedToMessageContext})`;
+  }
 
   // Apply context length limit
   if (conversation.length > contextLength) {

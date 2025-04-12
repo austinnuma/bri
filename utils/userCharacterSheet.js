@@ -376,7 +376,7 @@ Your response should be a valid JSON object matching the structure of the curren
         { role: "user", content: prompt }
       ],
       response_format: { type: "json_object" },
-      max_tokens: 1000,
+      max_tokens: 3000,
     });
     
     // Parse the updated conversation style
