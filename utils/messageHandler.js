@@ -424,12 +424,40 @@ export async function handleLegacyMessage(message) {
         const repliedToAuthor = repliedToMessage.author.username;
         const repliedToContent = repliedToMessage.content;
         
-        // Handle attachments if they exist
-        const attachmentInfo = repliedToMessage.attachments.size > 0 ? 
-          ` [Attached ${repliedToMessage.attachments.size} ${repliedToMessage.attachments.size === 1 ? 'file' : 'files'}]` : '';
+        // Check for image attachments
+        const imageAttachmentsInReply = repliedToMessage.attachments.filter(isImageAttachment);
         
-        // Format the context information
-        repliedToMessageContext = `This is in reply to a message from ${repliedToAuthor} who said: "${repliedToContent}${attachmentInfo}"`;
+        // Generate attachment description
+        let attachmentInfo = '';
+        // For image attachments, provide more detailed context
+        if (imageAttachmentsInReply.size > 0) {
+          // If there are image attachments AND we have vision capabilities, try to describe them
+          if (await isFeatureEnabled(guildId, 'character')) {
+            try {
+              // Get all image URLs
+              const imageUrls = imageAttachmentsInReply.map(attachment => attachment.url);
+              
+              // Use the vision service to analyze the image with minimal context
+              const imageDescription = await analyzeImages(
+                imageUrls,
+                "Describe this image briefly",
+                []
+              );
+              
+              attachmentInfo = ` [Image description: ${imageDescription}]`;
+            } catch (error) {
+              logger.error("Error analyzing image in reply:", error);
+              attachmentInfo = ` [Attached ${imageAttachmentsInReply.size} ${imageAttachmentsInReply.size === 1 ? 'image' : 'images'}]`;
+            }
+          } else {
+            attachmentInfo = ` [Attached ${imageAttachmentsInReply.size} ${imageAttachmentsInReply.size === 1 ? 'image' : 'images'}]`;
+          }
+        } else if (repliedToMessage.attachments.size > 0) {
+          attachmentInfo = ` [Attached ${repliedToMessage.attachments.size} ${repliedToMessage.attachments.size === 1 ? 'file' : 'files'}]`;
+        }
+        
+        // Format the context information more clearly
+        repliedToMessageContext = `REPLIED_TO_MESSAGE: User ${repliedToAuthor} posted: "${repliedToContent}${attachmentInfo}"`;
         
         logger.info(`Added reply context to message from ${message.author.id} in guild ${guildId}. Original message from ${repliedToAuthor}`);
       }
@@ -591,12 +619,22 @@ export async function handleLegacyMessage(message) {
 
   // If we have context from a replied-to message, append it to the user's message
   if (repliedToMessageContext) {
-  // Get the index of the message we just added
+    // Get the index of the message we just added
     const lastMessageIndex = conversation.length - 1;
   
-    // Append the reply context to the user's message
+    // Append the reply context to the user's message, putting it on a new line
+    // and making it clear this is special context about what message is being replied to
     conversation[lastMessageIndex].content = 
-    `${conversation[lastMessageIndex].content}\n\n(${repliedToMessageContext})`;
+    `${conversation[lastMessageIndex].content}\n\n${repliedToMessageContext}`;
+    
+    // Add instructions to the system prompt about how to handle replies
+    if (conversation[0] && conversation[0].role === "system") {
+      conversation[0].content += `\n\nWhen you see a line starting with "REPLIED_TO_MESSAGE:", this indicates the user is replying to another user's message. ` +
+        `Pay special attention to this context, as the user is likely referring to or asking about the content of that message. ` +
+        `You may reference the original poster by name and content in your response. ` +
+        `For example, if Max posted "cats are nocturnal" and Austin asks you "is this true?", you can respond ` +
+        `with something like "No, Max's statement that cats are nocturnal is not entirely accurate."`;
+    }
   }
 
   // Apply context length limit
