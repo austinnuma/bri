@@ -91,6 +91,7 @@ const MEMORY_CATEGORIES = {
   PREFERENCES: 'preferences',
   HOBBIES: 'hobbies',
   CONTACT: 'contact',
+  PROJECTS: 'projects', // New category for ongoing projects/activities
   OTHER: 'other'
 };
 
@@ -145,6 +146,18 @@ export function categorizeMemory(text) {
                 'snapchat', 'tiktok', 'linkedin', 'profile', 'account', 'username', 'handle', 'website', 'blog',
                 'channel', 'discord', 'steam', 'gamer tag', 'psn', 'xbox live', 'contact info', 'number', 'call'],
       examples: ['User can be reached at user@example.com', 'User\'s Instagram handle is @username']
+    },
+    { 
+      name: MEMORY_CATEGORIES.PROJECTS, 
+      keywords: ['working on', 'setting up', 'building', 'creating', 'developing', 'starting', 'planning', 
+                'project', 'initiative', 'renovation', 'upgrading', 'installing', 'customizing', 'designing',
+                'crafting', 'remodeling', 'constructing', 'assembling', 'preparing', 'organizing', 'managing',
+                'goals', 'objective', 'task', 'undertaking', 'endeavor', 'venture', 'pursuit', 'scheme',
+                'aquarium', 'garden', 'home', 'house', 'car', 'vehicle', 'bike', 'computer', 'website', 'app',
+                'startup', 'course', 'certification', 'degree', 'skills', 'learning', 'studying', 'researching',
+                'growing', 'cultivating', 'breeding', 'raising', 'training'],
+      examples: ['User is setting up a planted aquarium', 'User is working on a home renovation project', 'User is building a new gaming PC',
+                'User is learning Spanish for an upcoming trip', 'User is planning a vegetable garden', 'User is developing a mobile app']
     }
   ];
   

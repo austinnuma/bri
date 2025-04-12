@@ -19,10 +19,10 @@ export async function enhancedDirectSummarization(conversation, botName = "Bri")
     .join("\n");
   const metadata = `Conversation metadata: total messages: ${numMessages}.`;
   
-  // Enhanced prompt that better captures preferences and reactions
+  // Enhanced prompt that better captures preferences, reactions, and ongoing projects
   // Added explicit bot name awareness
   const summaryPrompt = `
-Please provide a detailed summary of the conversation below, focusing especially on personal information and preferences.
+Please provide a detailed summary of the conversation below, focusing especially on personal information, preferences, and ongoing projects or activities.
 
 IMPORTANT CONTEXT: This is a conversation with a Discord bot named "${botName}". Users often address the bot as "${botName}" (e.g., "Hey ${botName}", "Hello ${botName}"). The name "${botName}" in these contexts refers to the bot, NOT to the user. DO NOT mistake references to the bot's name as indicating the user's name.
 
@@ -33,6 +33,11 @@ Pay special attention to:
    - Emotional reactions to topics (excitement, enthusiasm, disgust)
    - Positive/negative responses to suggestions or mentions
    - Level of engagement with different topics
+4. ONGOING PROJECTS the user is working on:
+   - Projects with persistent outcomes (setting up aquariums, building things, planning gardens, etc.)
+   - Long-term activities the user is engaged in (learning languages, training for events, etc.)
+   - Activities that involve multiple steps or continuing effort
+   - Projects the user mentions specific details about
 
 For example:
 - If user responds "that sounds delicious!" to cookies → note "User enjoys cookies"
@@ -51,7 +56,7 @@ ${conversationText}`;
       messages: [
         { 
           role: "system", 
-          content: `You are a summarization assistant that produces very detailed summaries, with special focus on personal information and both explicit and implicit preferences. You're particularly skilled at noticing when people indicate preferences indirectly through their reactions. Important: This is a conversation with a bot named "${botName}". DO NOT mistake references to "${botName}" (which is the bot's name) as being the user's name.` 
+          content: `You are a summarization assistant that produces very detailed summaries, with special focus on personal information, preferences, and ongoing projects or activities. You're particularly skilled at noticing when people indicate preferences indirectly through their reactions, and at identifying ongoing activities that have persistent outcomes. Focus on projects the user is working on, like setting up an aquarium, building a garden, learning a skill, etc. Important: This is a conversation with a bot named "${botName}". DO NOT mistake references to "${botName}" (which is the bot's name) as being the user's name.` 
         },
         { role: "user", content: summaryPrompt }
       ],
@@ -110,8 +115,12 @@ Focus especially on:
 2. EXPLICIT preferences (directly stated likes/dislikes)
 3. IMPLICIT preferences (revealed through reactions and engagement)
 4. Any emotional responses to topics that might indicate interests or preferences
+5. ONGOING PROJECTS the user is working on (setting up aquariums, building things, planning gardens, etc.)
+6. Long-term activities or goals the user is pursuing
+7. Projects that involve multiple steps or continuing effort
+8. Specific details about what the user is working on or planning
 
-Ensure all preferences, both stated directly and implied through reactions, are clearly noted in your summary.
+Ensure all preferences, ongoing projects, and activities with persistent outcomes are clearly noted in your summary.
 
 IMPORTANT: When users write messages like "Hey ${botName}" or "Hi ${botName}", they are addressing the bot, NOT stating their own name. DO NOT conclude that the user's name is "${botName}" based on these greetings.
 
@@ -123,7 +132,7 @@ ${combinedChunkSummary}`;
       messages: [
         { 
           role: "system", 
-          content: `You are a summarization assistant that produces comprehensive and detailed summaries, with special focus on both explicit and implicit user preferences. Important: This is a conversation with a bot named "${botName}". DO NOT mistake references to "${botName}" (which is the bot's name) as being the user's name.` 
+          content: `You are a summarization assistant that produces comprehensive and detailed summaries, with special focus on explicit and implicit user preferences, as well as ongoing projects or activities. You excel at identifying what projects the user is actively working on (like setting up an aquarium, building a garden, learning a skill) and any long-term activities with persistent outcomes. Important: This is a conversation with a bot named "${botName}". DO NOT mistake references to "${botName}" (which is the bot's name) as being the user's name.` 
         },
         { role: "user", content: finalPrompt }
       ],

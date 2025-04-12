@@ -50,12 +50,28 @@ export function postProcessExtractedFacts(facts, botName = "Bri") {
       return false;
     }
     
-    // Filter out uncertain statements
-    if (lowercaseFact.includes('might be') || 
+    // Filter out uncertain statements (but be more permissive for ongoing projects)
+    const isProjectRelated = 
+      lowercaseFact.includes('working on') || 
+      lowercaseFact.includes('setting up') ||
+      lowercaseFact.includes('building') ||
+      lowercaseFact.includes('creating') ||
+      lowercaseFact.includes('developing') ||
+      lowercaseFact.includes('planning') ||
+      lowercaseFact.includes('installing') ||
+      lowercaseFact.includes('starting') ||
+      lowercaseFact.includes('aquarium') ||
+      lowercaseFact.includes('garden') ||
+      lowercaseFact.includes('learning') ||
+      lowercaseFact.includes('studying');
+      
+    // If it's project-related, be more lenient with uncertainties
+    if (!isProjectRelated && (
+        lowercaseFact.includes('might be') || 
         lowercaseFact.includes('possibly') ||
         lowercaseFact.includes('probably') ||
         lowercaseFact.includes('could be') ||
-        lowercaseFact.includes('may have')) {
+        lowercaseFact.includes('may have'))) {
       return false;
     }
     
@@ -156,7 +172,7 @@ export async function enhancedMemoryExtraction(userId, conversation, guildId, bo
 export async function extractExplicitFacts(summary, botName = "Bri") {
   const explicitPrompt = `
 Extract ONLY clearly stated, explicit facts about the user from this conversation summary.
-Focus on biographical information, concrete details, and directly stated preferences.
+Focus on biographical information, concrete details, directly stated preferences, and ONGOING PROJECTS OR ACTIVITIES.
 
 IMPORTANT: This conversation is with a Discord bot named "${botName}". The name "${botName}" often appears when users are addressing the bot (e.g., "Hey ${botName}", "Hello ${botName}"). DO NOT extract "${botName}" as the user's name unless there is explicit evidence that the user has directly stated "My name is ${botName}" or similar unambiguous declaration.
 
@@ -166,6 +182,15 @@ Include:
 - Clearly stated likes/dislikes ("I love pizza", "I hate horror movies")
 - Family details, pets
 - Concrete hobbies and activities they engage in
+- ONGOING PROJECTS the user is working on (examples: setting up an aquarium, renovating a home, building a PC, learning a language, creating a garden)
+- LONG-TERM ACTIVITIES or GOALS the user is pursuing (examples: training for a marathon, working on a certification, developing an app)
+- SPECIFIC PLANS the user has made or is making (examples: planning a trip, organizing an event)
+
+Especially focus on identifying activities where:
+- The user is actively working on something that will persist (not temporary activities like "eating dinner")
+- The user might refer back to this project/activity in future conversations
+- The project/activity involves multiple steps or ongoing effort
+- The user has mentioned specific details about what they're working on
 
 Exclude:
 - Implied preferences without direct statements
@@ -173,9 +198,10 @@ Exclude:
 - Hypothetical statements
 - Meta-statements about missing information
 - References to "${botName}" when users are addressing the bot
+- Temporary activities with no lasting outcome (like "User is watching TV" or "User had coffee")
 
 Output ONLY a JSON array of facts:
-["User's name is John", "User works as a software engineer"]
+["User's name is John", "User works as a software engineer", "User is setting up a 20-gallon planted aquarium"]
 
 If no explicit facts are found, output an empty array: []
 -----
@@ -187,7 +213,7 @@ SUMMARY: ${summary}`;
       messages: [
         { 
           role: "system", 
-          content: `You extract only explicit, clearly stated facts about users. Be precise and factual. This conversation is with a bot named "${botName}". Be careful not to extract "${botName}" as the user's name when it appears in greetings to the bot.`
+          content: `You extract explicit, clearly stated facts about users, with special attention to ongoing projects and activities. Be precise and factual but don't miss details about what the user is currently working on (like setting up an aquarium, building a garden, learning a skill, etc.). This conversation is with a bot named "${botName}". Be careful not to extract "${botName}" as the user's name when it appears in greetings to the bot.`
         },
         { role: "user", content: explicitPrompt }
       ],
@@ -228,7 +254,7 @@ export async function extractImpliedPreferences(summary, conversation, botName =
     .join("\n");
   
   const preferencePrompt = `
-Analyze this conversation summary and user messages to identify IMPLIED preferences and interests.
+Analyze this conversation summary and user messages to identify IMPLIED preferences, interests, AND ONGOING PROJECTS OR ACTIVITIES.
 
 IMPORTANT: This conversation is with a Discord bot named "${botName}". Many messages will start with phrases like "Hey ${botName}" or "Hi ${botName}" which are addressing the bot, not referring to the user. DO NOT infer that the user's name is ${botName} based on these greetings.
 
@@ -238,11 +264,23 @@ Look for:
 3. Subtle cues about likes/dislikes without direct statements
 4. Food, entertainment, or activity preferences based on context
 5. Values and priorities revealed through conversation
+6. ONGOING PROJECTS the user mentions or discusses (even if mentioned in passing)
+7. LONG-TERM ACTIVITIES the user seems committed to
+8. Specific details about projects that indicate the user is actively working on them
 
 Examples of good inferences:
 - If user responds positively to cookies → "User enjoys cookies"
 - If user asks detailed questions about a topic → "User is interested in [topic]"
 - If user mentions watching a show multiple times → "User enjoys [show]"
+- If user mentions researching fish for an aquarium → "User is setting up an aquarium"
+- If user asks about different types of plants → "User is working on a garden project"
+- If user discusses progress on a task → "User is working on [project]"
+
+Especially focus on identifying activities where:
+- The user is actively working on something that will persist over time
+- The user might refer back to this project/activity in future conversations
+- The project/activity involves multiple steps or ongoing effort
+- The user has mentioned specific details about what they're working on
 
 Do NOT include:
 - Anything already covered in explicit facts
@@ -250,11 +288,12 @@ Do NOT include:
 - Highly uncertain inferences
 - "Not provided" statements
 - Any inference that the user's name is "${botName}" based on greetings to the bot
+- Temporary activities with no lasting outcome (like "User is watching TV" or "User had coffee")
 
-Output ONLY a JSON array of inferred preferences:
-["User enjoys action movies", "User is interested in astronomy"]
+Output ONLY a JSON array of inferred preferences and projects:
+["User enjoys action movies", "User is interested in astronomy", "User is setting up a freshwater aquarium"]
 
-If no preferences can be confidently inferred, output an empty array: []
+If no preferences or projects can be confidently inferred, output an empty array: []
 -----
 SUMMARY: ${summary}
 
@@ -266,7 +305,7 @@ USER MESSAGES: ${userMessages}`;
       messages: [
         { 
           role: "system", 
-          content: `You extract implied preferences and interests from conversations. Be insightful but reasonably confident in your inferences. This conversation is with a bot named "${botName}". Be careful not to extract "${botName}" as the user's name when it appears in greetings to the bot.`
+          content: `You extract implied preferences, interests, and ongoing projects/activities from conversations. Look for any signs that the user is working on something (like setting up an aquarium, building a garden, renovating, etc.) or engaged in a long-term activity (learning a skill, training for something, etc.). Be insightful but reasonably confident in your inferences. This conversation is with a bot named "${botName}". Be careful not to extract "${botName}" as the user's name when it appears in greetings to the bot.`
         },
         { role: "user", content: preferencePrompt }
       ],
