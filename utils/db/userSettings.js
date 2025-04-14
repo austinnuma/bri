@@ -105,24 +105,7 @@ export async function setUserConversation(userId, guildId, conversation, threadI
   try {
     const cacheKey = getUserCacheKey(userId, guildId, 'conversation', threadId);
     
-    // First, delete any existing record for this user/guild/thread combination
-    if (threadId) {
-      await supabase
-        .from('user_conversations')
-        .delete()
-        .eq('user_id', userId)
-        .eq('guild_id', guildId)
-        .eq('thread_id', threadId);
-    } else {
-      await supabase
-        .from('user_conversations')
-        .delete()
-        .eq('user_id', userId)
-        .eq('guild_id', guildId)
-        .is('thread_id', null);
-    }
-    
-    // Then insert the new record
+    // Prepare the data object
     const dataObj = {
       user_id: userId,
       guild_id: guildId,
@@ -135,9 +118,67 @@ export async function setUserConversation(userId, guildId, conversation, threadI
       dataObj.thread_id = threadId;
     }
     
-    const { error } = await supabase
-      .from('user_conversations')
-      .insert(dataObj);
+    // Try to insert first, then update if it fails
+    let error = null;
+    
+    try {
+      // First try to update any existing record
+      const updateResult = threadId 
+        ? await supabase
+            .from('user_conversations')
+            .update({ conversation, updated_at: new Date().toISOString() })
+            .eq('user_id', userId)
+            .eq('guild_id', guildId)
+            .eq('thread_id', threadId)
+        : await supabase
+            .from('user_conversations')
+            .update({ conversation, updated_at: new Date().toISOString() })
+            .eq('user_id', userId)
+            .eq('guild_id', guildId)
+            .is('thread_id', null);
+            
+      // If no rows affected, do an insert
+      if (updateResult.count === 0) {
+        const insertResult = await supabase
+          .from('user_conversations')
+          .insert(dataObj);
+          
+        error = insertResult.error;
+      } else {
+        error = updateResult.error;
+      }
+    } catch (err) {
+      // If the first method fails, try a brute force approach
+      logger.warn(`Regular upsert failed for ${userId} in guild ${guildId}${threadId ? ` thread ${threadId}` : ''}, trying fallback method`);
+      
+      try {
+        // First, delete any existing record
+        if (threadId) {
+          await supabase
+            .from('user_conversations')
+            .delete()
+            .eq('user_id', userId)
+            .eq('guild_id', guildId)
+            .eq('thread_id', threadId);
+        } else {
+          await supabase
+            .from('user_conversations')
+            .delete()
+            .eq('user_id', userId)
+            .eq('guild_id', guildId)
+            .is('thread_id', null);
+        }
+        
+        // Then insert
+        const insertResult = await supabase
+          .from('user_conversations')
+          .insert(dataObj);
+          
+        error = insertResult.error;
+      } catch (fallbackErr) {
+        error = fallbackErr;
+      }
+    }
     
     if (error) {
       logger.error(`Error saving conversation for user ${userId} in guild ${guildId}${threadId ? ` thread ${threadId}` : ''}:`, error);
