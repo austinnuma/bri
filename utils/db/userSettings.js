@@ -53,7 +53,7 @@ export async function getUserConversation(userId, guildId, threadId = null) {
     logger.debug(`Cache miss for conversation: ${userId} in guild ${guildId}${threadId ? ` thread ${threadId}` : ''}`);
     
     // If not in cache, fetch directly from database
-    const query = supabase
+    let query = supabase
       .from('user_conversations')
       .select('conversation')
       .eq('user_id', userId)
@@ -61,9 +61,10 @@ export async function getUserConversation(userId, guildId, threadId = null) {
       
     // Add thread filter if provided
     if (threadId) {
-      query.eq('thread_id', threadId);
+      query = query.eq('thread_id', threadId);
     } else {
-      query.is('thread_id', null);
+      // For backwards compatibility, match NULL thread_id values
+      query = query.is('thread_id', null);
     }
     
     const { data, error } = await query.single();
@@ -104,15 +105,22 @@ export async function setUserConversation(userId, guildId, conversation, threadI
   try {
     const cacheKey = getUserCacheKey(userId, guildId, 'conversation', threadId);
     
-    // Update database
-    const { error } = await supabase.from('user_conversations').upsert({
+    // Prepare the data object
+    const dataObj = {
       user_id: userId,
       guild_id: guildId,
-      thread_id: threadId,
       conversation,
       updated_at: new Date().toISOString()
-    }, {
-      onConflict: 'user_id,guild_id,thread_id'
+    };
+    
+    // Only add thread_id if it's provided (not null)
+    if (threadId) {
+      dataObj.thread_id = threadId;
+    }
+    
+    // Update database
+    const { error } = await supabase.from('user_conversations').upsert(dataObj, {
+      onConflict: threadId ? 'user_id,guild_id,thread_id' : 'user_id,guild_id'
     });
     
     if (error) {
@@ -440,7 +448,7 @@ export async function batchGetUserSettings(userId, guildId, threadId = null) {
     // If not all cached, fetch everything in one go
     logger.debug(`Batch fetching user settings for ${userId} in guild ${guildId}${threadId ? ` thread ${threadId}` : ''}`);
     
-    const query = supabase
+    let query = supabase
       .from('user_conversations')
       .select('conversation, context_length, system_prompt, personality_preferences')
       .eq('user_id', userId)
@@ -448,9 +456,10 @@ export async function batchGetUserSettings(userId, guildId, threadId = null) {
       
     // Add thread filter if provided
     if (threadId) {
-      query.eq('thread_id', threadId);
+      query = query.eq('thread_id', threadId);
     } else {
-      query.is('thread_id', null);
+      // For backwards compatibility, match NULL thread_id values
+      query = query.is('thread_id', null);
     }
     
     const { data, error } = await query.single();

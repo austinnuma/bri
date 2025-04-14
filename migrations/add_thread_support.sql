@@ -12,12 +12,19 @@ BEGIN
         -- Add the thread_id column to the table
         ALTER TABLE user_conversations ADD COLUMN thread_id text;
         
-        -- Create a new index that includes thread_id
-        CREATE INDEX user_conversations_thread_idx ON user_conversations(user_id, guild_id, thread_id);
-
-        -- Update the composite primary key to include thread_id (if not already done)
+        -- Create an index for better query performance
+        CREATE INDEX idx_user_conversations_thread ON user_conversations(user_id, guild_id, thread_id);
+        
+        -- Create a unique constraint instead of altering primary key
+        -- This allows NULL values in thread_id while ensuring uniqueness
         ALTER TABLE user_conversations DROP CONSTRAINT IF EXISTS user_conversations_pkey;
-        ALTER TABLE user_conversations ADD PRIMARY KEY (user_id, guild_id, thread_id);
+        ALTER TABLE user_conversations ADD CONSTRAINT user_conversations_pkey 
+            PRIMARY KEY (user_id, guild_id);
+            
+        -- Add a unique constraint for when thread_id is not null
+        CREATE UNIQUE INDEX idx_user_conversations_with_thread 
+            ON user_conversations(user_id, guild_id, thread_id) 
+            WHERE thread_id IS NOT NULL;
     END IF;
 END
 $$;
