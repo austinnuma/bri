@@ -26,7 +26,10 @@ const userSettingsCache = new LRUCache({
  * @param {string} dataType - Type of data (conversation, contextLength, etc.)
  * @returns {string} - Cache key
  */
-function getUserCacheKey(userId, guildId, dataType) {
+function getUserCacheKey(userId, guildId, dataType, threadId = null) {
+  if (threadId) {
+    return `${userId}:${guildId}:${threadId}:${dataType}`;
+  }
   return `${userId}:${guildId}:${dataType}`;
 }
 
@@ -34,27 +37,36 @@ function getUserCacheKey(userId, guildId, dataType) {
  * Gets a user's conversation context from the database with write-through caching
  * @param {string} userId - The user ID
  * @param {string} guildId - The guild ID
+ * @param {string|null} threadId - Optional thread ID for thread-specific conversations
  * @returns {Promise<Array>} - The conversation context
  */
-export async function getUserConversation(userId, guildId) {
+export async function getUserConversation(userId, guildId, threadId = null) {
   try {
-    const cacheKey = getUserCacheKey(userId, guildId, 'conversation');
+    const cacheKey = getUserCacheKey(userId, guildId, 'conversation', threadId);
     
     // Check cache first
     if (userConversationCache.has(cacheKey)) {
-      logger.debug(`Cache hit for conversation: ${userId} in guild ${guildId}`);
+      logger.debug(`Cache hit for conversation: ${userId} in guild ${guildId}${threadId ? ` thread ${threadId}` : ''}`);
       return userConversationCache.get(cacheKey);
     }
     
-    logger.debug(`Cache miss for conversation: ${userId} in guild ${guildId}`);
+    logger.debug(`Cache miss for conversation: ${userId} in guild ${guildId}${threadId ? ` thread ${threadId}` : ''}`);
     
     // If not in cache, fetch directly from database
-    const { data, error } = await supabase
+    const query = supabase
       .from('user_conversations')
       .select('conversation')
       .eq('user_id', userId)
-      .eq('guild_id', guildId)
-      .single();
+      .eq('guild_id', guildId);
+      
+    // Add thread filter if provided
+    if (threadId) {
+      query.eq('thread_id', threadId);
+    } else {
+      query.is('thread_id', null);
+    }
+    
+    const { data, error } = await query.single();
       
     if (error) {
       if (error.code === 'PGRST116') { // No rows found
@@ -63,7 +75,7 @@ export async function getUserConversation(userId, guildId) {
         userConversationCache.set(cacheKey, defaultConversation);
         return defaultConversation;
       }
-      logger.error(`Error fetching conversation for user ${userId} in guild ${guildId}:`, error);
+      logger.error(`Error fetching conversation for user ${userId} in guild ${guildId}${threadId ? ` thread ${threadId}` : ''}:`, error);
       throw error;
     }
     
@@ -74,7 +86,7 @@ export async function getUserConversation(userId, guildId) {
     
     return conversation;
   } catch (error) {
-    logger.error(`Error in getUserConversation for ${userId} in guild ${guildId}:`, error);
+    logger.error(`Error in getUserConversation for ${userId} in guild ${guildId}${threadId ? ` thread ${threadId}` : ''}:`, error);
     // Default fallback
     return [{ role: "system", content: STATIC_CORE_PROMPT }];
   }
@@ -85,24 +97,26 @@ export async function getUserConversation(userId, guildId) {
  * @param {string} userId - The user ID
  * @param {string} guildId - The guild ID
  * @param {Array} conversation - The conversation context
+ * @param {string|null} threadId - Optional thread ID for thread-specific conversations
  * @returns {Promise<boolean>} - Success status
  */
-export async function setUserConversation(userId, guildId, conversation) {
+export async function setUserConversation(userId, guildId, conversation, threadId = null) {
   try {
-    const cacheKey = getUserCacheKey(userId, guildId, 'conversation');
+    const cacheKey = getUserCacheKey(userId, guildId, 'conversation', threadId);
     
     // Update database
     const { error } = await supabase.from('user_conversations').upsert({
       user_id: userId,
       guild_id: guildId,
+      thread_id: threadId,
       conversation,
       updated_at: new Date().toISOString()
     }, {
-      onConflict: 'user_id,guild_id'
+      onConflict: 'user_id,guild_id,thread_id'
     });
     
     if (error) {
-      logger.error(`Error saving conversation for user ${userId} in guild ${guildId}:`, error);
+      logger.error(`Error saving conversation for user ${userId} in guild ${guildId}${threadId ? ` thread ${threadId}` : ''}:`, error);
       // On error, delete from cache to prevent stale data
       userConversationCache.delete(cacheKey);
       return false;
@@ -110,11 +124,11 @@ export async function setUserConversation(userId, guildId, conversation) {
     
     // Update cache with new data (write-through) instead of invalidating
     userConversationCache.set(cacheKey, conversation);
-    logger.debug(`Updated conversation cache for user ${userId} in guild ${guildId}`);
+    logger.debug(`Updated conversation cache for user ${userId} in guild ${guildId}${threadId ? ` thread ${threadId}` : ''}`);
     
     return true;
   } catch (error) {
-    logger.error(`Error in setUserConversation for ${userId} in guild ${guildId}:`, error);
+    logger.error(`Error in setUserConversation for ${userId} in guild ${guildId}${threadId ? ` thread ${threadId}` : ''}:`, error);
     return false;
   }
 }
@@ -395,12 +409,13 @@ export async function setUserPersonality(userId, guildId, personality) {
  * Efficiently fetch multiple user settings at once
  * @param {string} userId - User ID
  * @param {string} guildId - Guild ID
+ * @param {string|null} threadId - Optional thread ID for thread-specific conversations
  * @returns {Promise<Object>} - Combined user settings
  */
-export async function batchGetUserSettings(userId, guildId) {
+export async function batchGetUserSettings(userId, guildId, threadId = null) {
   try {
     // Generate cache keys
-    const conversationKey = getUserCacheKey(userId, guildId, 'conversation');
+    const conversationKey = getUserCacheKey(userId, guildId, 'conversation', threadId);
     const contextLengthKey = getUserCacheKey(userId, guildId, 'contextLength');
     const dynamicPromptKey = getUserCacheKey(userId, guildId, 'dynamicPrompt');
     const personalityKey = getUserCacheKey(userId, guildId, 'personality');
@@ -413,7 +428,7 @@ export async function batchGetUserSettings(userId, guildId) {
       userSettingsCache.has(personalityKey);
       
     if (hasAllCached) {
-      logger.debug(`Complete cache hit for batch user settings: ${userId} in guild ${guildId}`);
+      logger.debug(`Complete cache hit for batch user settings: ${userId} in guild ${guildId}${threadId ? ` thread ${threadId}` : ''}`);
       return {
         conversation: userConversationCache.get(conversationKey),
         contextLength: userSettingsCache.get(contextLengthKey),
@@ -423,17 +438,48 @@ export async function batchGetUserSettings(userId, guildId) {
     }
     
     // If not all cached, fetch everything in one go
-    logger.debug(`Batch fetching user settings for ${userId} in guild ${guildId}`);
+    logger.debug(`Batch fetching user settings for ${userId} in guild ${guildId}${threadId ? ` thread ${threadId}` : ''}`);
     
-    const { data, error } = await supabase
+    const query = supabase
       .from('user_conversations')
       .select('conversation, context_length, system_prompt, personality_preferences')
       .eq('user_id', userId)
-      .eq('guild_id', guildId)
-      .single();
+      .eq('guild_id', guildId);
+      
+    // Add thread filter if provided
+    if (threadId) {
+      query.eq('thread_id', threadId);
+    } else {
+      query.is('thread_id', null);
+    }
+    
+    const { data, error } = await query.single();
       
     if (error) {
       if (error.code === 'PGRST116') { // No rows found
+        // If thread-specific conversation not found but threadId provided, 
+        // use the default conversation from non-thread context as a starting point
+        if (threadId) {
+          try {
+            // Try to get the user's default conversation (without thread)
+            const defaultResponse = await batchGetUserSettings(userId, guildId, null);
+            
+            // Use default settings but with empty conversation history (just system prompt)
+            const defaults = {
+              ...defaultResponse,
+              conversation: [{ role: "system", content: defaultResponse.conversation[0]?.content || STATIC_CORE_PROMPT }]
+            };
+            
+            // Cache the thread-specific conversation
+            userConversationCache.set(conversationKey, defaults.conversation);
+            
+            return defaults;
+          } catch (err) {
+            logger.error(`Failed to fetch default settings for thread initialization: ${err}`);
+            // Fall through to standard defaults
+          }
+        }
+        
         // Return and cache defaults
         const defaults = {
           conversation: [{ role: "system", content: STATIC_CORE_PROMPT }],
@@ -455,7 +501,7 @@ export async function batchGetUserSettings(userId, guildId) {
         return defaults;
       }
       
-      logger.error(`Error batch fetching user settings for ${userId} in guild ${guildId}:`, error);
+      logger.error(`Error batch fetching user settings for ${userId} in guild ${guildId}${threadId ? ` thread ${threadId}` : ''}:`, error);
       throw error;
     }
     
@@ -483,7 +529,7 @@ export async function batchGetUserSettings(userId, guildId) {
     
     return results;
   } catch (error) {
-    logger.error(`Error in batchGetUserSettings for ${userId} in guild ${guildId}:`, error);
+    logger.error(`Error in batchGetUserSettings for ${userId} in guild ${guildId}${threadId ? ` thread ${threadId}` : ''}:`, error);
     
     // Return defaults on error
     return {
@@ -503,14 +549,15 @@ export async function batchGetUserSettings(userId, guildId) {
  * Warms up cache for a specific user (pre-loads all common settings)
  * @param {string} userId - User ID
  * @param {string} guildId - Guild ID
+ * @param {string|null} threadId - Optional thread ID for thread-specific conversations
  */
-export async function warmupUserCache(userId, guildId) {
+export async function warmupUserCache(userId, guildId, threadId = null) {
   try {
     // Simply call the batch function which caches everything
-    await batchGetUserSettings(userId, guildId);
-    logger.debug(`Warmed up cache for user ${userId} in guild ${guildId}`);
+    await batchGetUserSettings(userId, guildId, threadId);
+    logger.debug(`Warmed up cache for user ${userId} in guild ${guildId}${threadId ? ` thread ${threadId}` : ''}`);
   } catch (error) {
-    logger.error(`Error warming up cache for user ${userId} in guild ${guildId}:`, error);
+    logger.error(`Error warming up cache for user ${userId} in guild ${guildId}${threadId ? ` thread ${threadId}` : ''}:`, error);
   }
 }
 

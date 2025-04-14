@@ -114,17 +114,18 @@ const pendingVerifications = new Map();
  * Combined function to warmup both caches for consistency
  * @param {string} userId - User ID
  * @param {string} guildId - Guild ID 
+ * @param {string|null} threadId - Optional thread ID for thread-specific conversations
  */
-async function warmupCombinedUserCache(userId, guildId) {
+async function warmupCombinedUserCache(userId, guildId, threadId = null) {
   try {
     // Warm up both caches in parallel for efficiency
     await Promise.all([
       warmupCacheManagerUserCache(userId, guildId),
-      warmupUserSettingsCache(userId, guildId)
+      warmupUserSettingsCache(userId, guildId, threadId)
     ]);
-    logger.debug(`Warmed up all caches for user ${userId} in guild ${guildId}`);
+    logger.debug(`Warmed up all caches for user ${userId} in guild ${guildId}${threadId ? ` thread ${threadId}` : ''}`);
   } catch (error) {
-    logger.error(`Error warming up combined caches for user ${userId} in guild ${guildId}:`, error);
+    logger.error(`Error warming up combined caches for user ${userId} in guild ${guildId}${threadId ? ` thread ${threadId}` : ''}:`, error);
   }
 }
 
@@ -132,15 +133,16 @@ async function warmupCombinedUserCache(userId, guildId) {
  * Combined function to invalidate both caches for consistency
  * @param {string} userId - User ID
  * @param {string} guildId - Guild ID
+ * @param {string|null} threadId - Optional thread ID for thread-specific conversations
  */
-function invalidateCombinedUserCache(userId, guildId) {
+function invalidateCombinedUserCache(userId, guildId, threadId = null) {
   try {
     // Invalidate both caches for consistency
     invalidateCacheManagerUserCache(userId, guildId);
     // No explicit invalidation needed for userSettings cache due to write-through approach
-    logger.debug(`Invalidated cache for user ${userId} in guild ${guildId}`);
+    logger.debug(`Invalidated cache for user ${userId} in guild ${guildId}${threadId ? ` thread ${threadId}` : ''}`);
   } catch (error) {
-    logger.error(`Error invalidating cache for user ${userId} in guild ${guildId}:`, error);
+    logger.error(`Error invalidating cache for user ${userId} in guild ${guildId}${threadId ? ` thread ${threadId}` : ''}:`, error);
   }
 }
 
@@ -280,7 +282,7 @@ async function handleImageAttachments(message, cleanedContent, guildId) {
     const imageUrls = imageAttachments.map(attachment => attachment.url);
     
     // Get conversation history for this user using write-through cache
-    let conversationHistory = await getUserConversation(message.author.id, guildId) || [];
+    let conversationHistory = await getUserConversation(message.author.id, guildId, threadId) || [];
     
     // Use the enhanced analyzeImages function with conversation context
     const imageDescription = await analyzeImages(
@@ -316,7 +318,7 @@ async function handleImageAttachments(message, cleanedContent, guildId) {
       
       // Save the updated conversation using write-through caching
       // This will update both the database and the cache simultaneously
-      await setUserConversation(message.author.id, guildId, conversationHistory);
+      await setUserConversation(message.author.id, guildId, conversationHistory, threadId);
       
       // No need to invalidate cache explicitly as setUserConversation uses write-through caching
       // Remove: invalidateUserCache(message.author.id, guildId);
@@ -341,6 +343,15 @@ export async function handleLegacyMessage(message) {
   
   // Get guild ID for multi-server support
   const guildId = message.guild.id;
+  
+  // Check if message is in a thread and get thread ID if it is
+  const isThread = message.channel.isThread();
+  const threadId = isThread ? message.channel.id : null;
+  
+  // If this is a thread, add some additional logging
+  if (isThread) {
+    logger.info(`Processing message in thread ${threadId} from user ${message.author.id} in guild ${guildId}`);
+  }
   
   // Check if user is blocked
   const { isUserBlocked } = await import('./moderation/userBlocker.js');
@@ -481,7 +492,7 @@ export async function handleLegacyMessage(message) {
     }
     
     // Bri is being explicitly invoked, warm up the cache
-    await warmupCombinedUserCache(message.author.id, guildId);
+    await warmupCombinedUserCache(message.author.id, guildId, threadId);
     
     // Clean the content if it has the prefix
     if (hasPrefix) {
@@ -494,7 +505,7 @@ export async function handleLegacyMessage(message) {
     }
     
     // This is a designated channel, so Bri is being explicitly invoked, warm up the cache
-    await warmupCombinedUserCache(message.author.id, guildId);
+    await warmupCombinedUserCache(message.author.id, guildId, threadId);
   }
   
  // Handle image analysis if feature is enabled
@@ -602,7 +613,9 @@ export async function handleLegacyMessage(message) {
 
   // IMPROVED: Use the batch function to get all user settings at once
   // This reduces multiple database calls to a single call
-  const userSettings = await batchGetUserSettings(message.author.id, guildId);
+  // When threadId is provided, we retrieve thread-specific conversation history
+  // Each thread maintains its own separate conversation context
+  const userSettings = await batchGetUserSettings(message.author.id, guildId, threadId);
   
   // Extract needed values from the batch result
   let conversation = userSettings.conversation;
@@ -646,7 +659,7 @@ export async function handleLegacyMessage(message) {
   }
   
   // Save updated conversation to database with write-through caching
-  await setUserConversation(message.author.id, guildId, conversation);
+  await setUserConversation(message.author.id, guildId, conversation, threadId);
 
   await message.channel.sendTyping();
 
@@ -709,7 +722,7 @@ export async function handleLegacyMessage(message) {
     conversation.push({ role: "assistant", content: reply });
     
     // Save to database directly - overwrite in-memory approach
-    await setUserConversation(message.author.id, guildId, conversation);
+    await setUserConversation(message.author.id, guildId, conversation, threadId);
 
     // Update username mapping if needed
     updateUserMapping(message).catch(err => {
@@ -799,7 +812,9 @@ export async function handleLegacyMessage(message) {
         
         logger.info(`Triggering summarization for user ${message.author.id} in guild ${guildId} after ${userMessageCounters.get(userGuildCounterKey)} messages`);
         
-        summarizeAndExtract(message.author.id, conversation, guildId).then(async result => {
+        // Don't extract memories from threads to avoid cross-contamination
+        if (!threadId) {
+          summarizeAndExtract(message.author.id, conversation, guildId).then(async result => {
           logger.info(`Memory extraction complete for user ${message.author.id} in guild ${guildId}`);
           
           // If we have the memory graph system available, build connections for the latest memories
@@ -821,6 +836,7 @@ export async function handleLegacyMessage(message) {
         }).catch(err => {
           logger.error(`Error in memory extraction process: ${err}`);
         });
+        }
         
         // Reset counter and update timestamp immediately
         userMessageCounters.set(userGuildCounterKey, 0);
