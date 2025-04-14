@@ -118,10 +118,47 @@ export async function setUserConversation(userId, guildId, conversation, threadI
       dataObj.thread_id = threadId;
     }
     
-    // Update database
-    const { error } = await supabase.from('user_conversations').upsert(dataObj, {
-      onConflict: threadId ? 'user_id,guild_id,thread_id' : 'user_id,guild_id'
-    });
+    // Update database - use a simpler approach to avoid constraint issues
+    let error = null;
+    
+    if (threadId) {
+      // For thread conversations, first check if record exists
+      const { data: existingData } = await supabase
+        .from('user_conversations')
+        .select('user_id')
+        .eq('user_id', userId)
+        .eq('guild_id', guildId)
+        .eq('thread_id', threadId)
+        .single();
+        
+      if (existingData) {
+        // Update existing record
+        const result = await supabase
+          .from('user_conversations')
+          .update({
+            conversation,
+            updated_at: new Date().toISOString()
+          })
+          .eq('user_id', userId)
+          .eq('guild_id', guildId)
+          .eq('thread_id', threadId);
+        error = result.error;
+      } else {
+        // Insert new record
+        const result = await supabase
+          .from('user_conversations')
+          .insert(dataObj);
+        error = result.error;
+      }
+    } else {
+      // For regular conversations, use upsert with primary key
+      const result = await supabase
+        .from('user_conversations')
+        .upsert(dataObj, {
+          onConflict: 'user_id,guild_id'
+        });
+      error = result.error;
+    }
     
     if (error) {
       logger.error(`Error saving conversation for user ${userId} in guild ${guildId}${threadId ? ` thread ${threadId}` : ''}:`, error);
