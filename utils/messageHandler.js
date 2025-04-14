@@ -385,7 +385,8 @@ export async function handleLegacyMessage(message) {
   // Update last active timestamp
   userLastActive.set(userGuildKey, now);
 
-  const isDesignated = serverConfig.designated_channels.includes(message.channel.id);
+  // Consider both designated channels and threads as places where Bri responds by default
+  const isDesignated = serverConfig.designated_channels.includes(message.channel.id) || isThread;
   let cleanedContent = message.content;
 
   // Initialize reply context variable
