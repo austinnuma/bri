@@ -36,17 +36,24 @@ BEGIN
 END
 $$;
 
--- Create a new unique constraint that includes thread_id
+-- Create a function to generate a unique key for thread_id (NULL or value)
+CREATE OR REPLACE FUNCTION thread_id_key(text) RETURNS text AS $$
+BEGIN
+    RETURN COALESCE($1, '');
+END;
+$$ LANGUAGE plpgsql IMMUTABLE;
+
+-- Create a new unique index that handles NULL thread_id properly
 DO $$
 BEGIN
     IF NOT EXISTS (
         SELECT 1
-        FROM pg_constraint
-        WHERE conname = 'user_conversations_unique_with_thread'
+        FROM pg_indexes
+        WHERE tablename = 'user_conversations' 
+        AND indexname = 'idx_user_thread_unique'
     ) THEN
-        ALTER TABLE user_conversations 
-            ADD CONSTRAINT user_conversations_unique_with_thread 
-            UNIQUE (user_id, guild_id, COALESCE(thread_id, ''));
+        CREATE UNIQUE INDEX idx_user_thread_unique 
+        ON user_conversations(user_id, guild_id, thread_id_key(thread_id));
     END IF;
 END
 $$;
