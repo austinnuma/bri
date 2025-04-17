@@ -264,9 +264,10 @@ function isImageAttachment(attachment) {
  * @param {Message} message - The Discord message
  * @param {string} cleanedContent - The cleaned message content
  * @param {string} guildId - The guild ID
+ * @param {string|null} threadId - The thread ID if the message is in a thread
  * @returns {Promise<boolean>} - Whether images were handled
  */
-async function handleImageAttachments(message, cleanedContent, guildId) {
+async function handleImageAttachments(message, cleanedContent, guildId, threadId = null) {
   // Extract all image attachments
   const imageAttachments = message.attachments.filter(isImageAttachment);
   
@@ -543,7 +544,7 @@ export async function handleLegacyMessage(message) {
   }
   
   // Process the images
-  const imagesHandled = await handleImageAttachments(message, cleanedContent, guildId);
+  const imagesHandled = await handleImageAttachments(message, cleanedContent, guildId, threadId);
   
   // If images were handled successfully and credits are enabled, use credits
   if (imagesHandled && creditsEnabled && !hasUnlimitedVision) {
