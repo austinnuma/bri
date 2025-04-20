@@ -348,7 +348,7 @@ If there are no clear relationships, return {"relationships": []}
 `;
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
+      model: "gpt-4o", // Using more capable model for understanding complex memory relationships
       messages: [
         { 
           role: "system", 

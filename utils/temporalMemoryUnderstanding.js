@@ -110,7 +110,7 @@ Format your response as JSON:
 `;
 
       const completion = await openai.chat.completions.create({
-        model: "gpt-3.5-turbo",
+        model: "gpt-4o", // Using more capable model for temporal analysis
         messages: [
           { 
             role: "system", 
@@ -687,7 +687,7 @@ Format your response as JSON:
 `;
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
+      model: "gpt-4o", // Using more capable model for understanding temporal queries
       messages: [
         { 
           role: "system", 

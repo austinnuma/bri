@@ -490,40 +490,46 @@ export async function curateMemoriesWithAI(userId) {
       
       totalProcessed += memories.length;
       
-      // Create a prompt for the AI
+      // Create an improved prompt for the AI with more specific instructions
       const prompt = `
 As a memory management expert, your task is to analyze and curate this list of memories about a user.
-The goal is to keep only the most useful, accurate, and non-redundant memories.
+The goal is to maintain a comprehensive and detailed understanding of the user while removing redundancies.
 
 Current memories in the "${category}" category:
 ${memories.map((mem, i) => `${i+1}. "${mem.memory_text}" (confidence: ${mem.confidence})`).join('\n')}
 
-Please analyze these memories and:
-1. Identify duplicates or highly similar memories
-2. Identify low-quality or uninformative memories
-3. Identify memories that could be merged or combined
-4. Keep only the most important, high-quality memories
+Please analyze these memories CAREFULLY following these principles:
+1. PRESERVE UNIQUE DETAILS: Each memory might contain unique nuggets of information. Even if memories seem similar, they often contain different important details.
+2. BE CONSERVATIVE WITH MERGING: Only merge memories when they are truly duplicative or directly about the same topic/preference with no unique details in either.
+3. AVOID CREATING OVERLY GENERAL MEMORIES: Don't combine unrelated or vaguely related memories into generic statements that lose specificity.
+4. DETAILED PRESERVATION: When merging memories, the new text should preserve ALL unique details from the component memories.
+5. DISTINCT TOPICS: DO NOT merge memories about different topics (e.g., don't combine "likes anime" with "enjoys discussing aerospace").
+
+Guidelines for decision-making:
+- KEEP memories with unique, specific information
+- REMOVE only exact duplicates or entirely redundant memories
+- MERGE only when memories discuss the same specific topic and combining them preserves all details
 
 Return your analysis as a JSON object with these properties:
 {
   "keep": [1, 4, 7],  // Array of indices (1-based) of memories to keep as-is
-  "remove": [2, 3, 5], // Array of indices of memories to remove completely
-  "merge": [  // Array of merge operations
+  "remove": [2, 3, 5], // Array of indices of memories to remove completely (only exact duplicates)
+  "merge": [  // Array of merge operations (only for truly related memories about the SAME topic)
     {
       "indices": [6, 8, 9],  // Indices of memories to merge
-      "new_text": "Improved combined memory text"  // The merged memory text
+      "new_text": "Detailed combined memory text that preserves ALL specific details from the original memories"
     }
   ],
-  "reasoning": "Brief explanation of your decisions"
+  "reasoning": "Detailed explanation of your decisions, focusing on which unique details were preserved"
 }
 `;
 
       const response = await openai.chat.completions.create({
-        model: "gpt-3.5-turbo", // Can use a cheaper model for this task
+        model: "gpt-4o", // Use more capable model for this critical task
         messages: [
           { 
             role: "system", 
-            content: "You are an expert system for memory management and curation. Your task is to analyze user memories and determine which to keep, remove, or merge." 
+            content: "You are an expert system for memory management and curation. Your task is to analyze user memories and determine which to keep, remove, or merge. Your primary goal is to MAINTAIN DETAIL AND SPECIFICITY while removing only true redundancy. Never merge memories about different topics or interests. Be very conservative with merging - if in doubt, keep memories separate." 
           },
           { role: "user", content: prompt }
         ],
@@ -604,7 +610,8 @@ Return your analysis as a JSON object with these properties:
               source: 'ai_curation',
               embedding: newEmbedding, // Include embedding
               last_accessed: lastAccessed, // Include last_accessed (could be null)
-              access_count: accessCount // Include access_count
+              access_count: accessCount, // Include access_count
+              active: true
             };
             
             // Insert the new memory
@@ -617,6 +624,50 @@ Return your analysis as a JSON object with these properties:
             if (!createError && newMemory) {
               // Deactivate the original memories
               const idsToDeactivate = merge.indices.map(idx => memories[idx-1].id);
+              
+              // First, get all memory connections for these memories to preserve the graph
+              const { data: connections, error: connectionsError } = await supabase
+                .from('memory_connections')
+                .select('*')
+                .or(idsToDeactivate.map(id => `source_memory_id.eq.${id}`).join(','))
+                .or(idsToDeactivate.map(id => `target_memory_id.eq.${id}`).join(','));
+                
+              if (!connectionsError && connections && connections.length > 0) {
+                logger.info(`Found ${connections.length} memory connections to migrate for merged memory ${newMemory.id}`);
+                
+                // Recreate these connections with the new memory ID
+                for (const connection of connections) {
+                  // If the connection source is one of the merged memories, create a new connection from the new memory
+                  if (idsToDeactivate.includes(connection.source_memory_id)) {
+                    await supabase
+                      .from('memory_connections')
+                      .insert({
+                        source_memory_id: newMemory.id,
+                        target_memory_id: connection.target_memory_id,
+                        relationship_type: connection.relationship_type,
+                        confidence: connection.confidence,
+                        created_at: new Date().toISOString(),
+                        updated_at: new Date().toISOString()
+                      });
+                  }
+                  
+                  // If the connection target is one of the merged memories, create a new connection to the new memory
+                  if (idsToDeactivate.includes(connection.target_memory_id)) {
+                    await supabase
+                      .from('memory_connections')
+                      .insert({
+                        source_memory_id: connection.source_memory_id,
+                        target_memory_id: newMemory.id,
+                        relationship_type: connection.relationship_type,
+                        confidence: connection.confidence,
+                        created_at: new Date().toISOString(),
+                        updated_at: new Date().toISOString()
+                      });
+                  }
+                }
+              }
+              
+              // Now deactivate the original memories
               const { error: updateError } = await supabase
                 .from('unified_memories')
                 .update({ active: false })
