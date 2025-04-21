@@ -1438,6 +1438,22 @@ export async function storeContextEventWithInstructions(userId, guildId, eventIn
       guildId
     );
     
+    // Validate date format and create valid date object
+    let eventDate;
+    try {
+      // Ensure date is in YYYY-MM-DD format
+      if (!eventInfo.date || !/^\d{4}-\d{2}-\d{2}$/.test(eventInfo.date)) {
+        logger.error("Invalid date format in eventInfo:", eventInfo);
+        return null;
+      }
+      
+      // Safely create the date object with proper time
+      eventDate = new Date(eventInfo.date + (eventInfo.time ? `T${eventInfo.time}` : 'T12:00:00')).toISOString();
+    } catch (dateError) {
+      logger.error("Invalid time value in eventInfo:", eventInfo, dateError);
+      return null;
+    }
+    
     // Create the event in the database
     const { data, error } = await supabase
       .from('bri_context_events')
@@ -1446,7 +1462,7 @@ export async function storeContextEventWithInstructions(userId, guildId, eventIn
         guild_id: guildId,
         event_title: eventInfo.title,
         event_type: eventInfo.type || 'event',
-        event_date: new Date(eventInfo.date + (eventInfo.time ? `T${eventInfo.time}` : 'T12:00:00')).toISOString(),
+        event_date: eventDate,
         event_time: eventInfo.time || null,
         description: eventInfo.description || null,
         extracted_from: 'conversation',
