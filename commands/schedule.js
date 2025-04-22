@@ -63,6 +63,11 @@ export const data = new SlashCommandBuilder()
                 option
                     .setName('channel')
                     .setDescription('Which channel to post in (defaults to current channel)')
+                    .setRequired(false))
+            .addBooleanOption(option =>
+                option
+                    .setName('dynamic')
+                    .setDescription('Generate a new message each day? (default: false)')
                     .setRequired(false)))
     .addSubcommand(subcommand =>
         subcommand
@@ -91,6 +96,35 @@ export const data = new SlashCommandBuilder()
                 option
                     .setName('message')
                     .setDescription('What should Bri say?')
+                    .setRequired(true))
+            .addChannelOption(option =>
+                option
+                    .setName('channel')
+                    .setDescription('Which channel to post in (defaults to current channel)')
+                    .setRequired(false))
+            .addBooleanOption(option =>
+                option
+                    .setName('dynamic')
+                    .setDescription('Generate a new message each week? (default: false)')
+                    .setRequired(false)))
+    .addSubcommand(subcommand =>
+        subcommand
+            .setName('collection')
+            .setDescription('Schedule a message that randomly selects from a collection of messages')
+            .addStringOption(option =>
+                option
+                    .setName('name')
+                    .setDescription('Name for this collection (e.g., "Daily Quote", "Motivation")')
+                    .setRequired(true))
+            .addStringOption(option =>
+                option
+                    .setName('time')
+                    .setDescription('What time each day? (e.g., "8:00", "15:30")')
+                    .setRequired(true))
+            .addStringOption(option =>
+                option
+                    .setName('messages')
+                    .setDescription('Add messages separated by | (e.g., "Message 1|Message 2|Another message")')
                     .setRequired(true))
             .addChannelOption(option =>
                 option
@@ -169,6 +203,8 @@ export async function execute(interaction) {
             await handleDailySchedule(interaction);
         } else if (subcommand === 'weekly') {
             await handleWeeklySchedule(interaction);
+        } else if (subcommand === 'collection') {
+            await handleCollectionSchedule(interaction);
         } else {
             logger.warn(`Unknown subcommand: ${subcommand}`);
             await interaction.editReply({
@@ -215,6 +251,7 @@ async function handleDailySchedule(interaction) {
         const timeString = interaction.options.getString('time');
         const customMessage = interaction.options.getString('custom_message');
         const channel = interaction.options.getChannel('channel') || interaction.channel;
+        const isDynamic = interaction.options.getBoolean('dynamic') || false;
         
         // Validate the channel is a text channel
         if (!channel.isTextBased()) {
@@ -240,33 +277,43 @@ async function handleDailySchedule(interaction) {
         // Create cron schedule for daily at the specified time
         const cronSchedule = `${minutes} ${hours} * * *`;
         
-        // Generate message content based on type
-        let messageContent;
+        // Generate message content based on type (if not dynamic)
+        let messageContent = null;
         
-        switch (messageType) {
-            case 'morning':
-                messageContent = await generateGreeting('morning');
-                break;
-            case 'night':
-                messageContent = await generateGreeting('night');
-                break;
-            case 'quote':
-                messageContent = await generateGreeting('quote');
-                break;
-            case 'custom':
-                if (!customMessage) {
+        // Only generate initial message content if not using dynamic mode
+        if (!isDynamic) {
+            switch (messageType) {
+                case 'morning':
+                    messageContent = await generateGreeting('morning');
+                    break;
+                case 'night':
+                    messageContent = await generateGreeting('night');
+                    break;
+                case 'quote':
+                    messageContent = await generateGreeting('quote');
+                    break;
+                case 'custom':
+                    if (!customMessage) {
+                        return interaction.editReply({
+                            content: "Please provide a custom message for your scheduled message.",
+                            ephemeral: true
+                        });
+                    }
+                    messageContent = customMessage;
+                    break;
+                default:
                     return interaction.editReply({
-                        content: "Please provide a custom message for your scheduled message.",
+                        content: "Please select a valid message type.",
                         ephemeral: true
                     });
-                }
-                messageContent = customMessage;
-                break;
-            default:
-                return interaction.editReply({
-                    content: "Please select a valid message type.",
-                    ephemeral: true
-                });
+            }
+        } else if (messageType === 'custom' && !customMessage) {
+            return interaction.editReply({
+                content: "For dynamic custom messages, you need to provide an initial message as a template.",
+                ephemeral: true
+            });
+        } else if (isDynamic && messageType === 'custom') {
+            messageContent = customMessage;
         }
         
         // Create the scheduled message
@@ -276,7 +323,8 @@ async function handleDailySchedule(interaction) {
             message_content: messageContent,
             cron_schedule: cronSchedule,
             timezone: guildTimezone,
-            guild_id: interaction.guildId
+            guild_id: interaction.guildId,
+            is_dynamic: isDynamic
         });
         
         if (!scheduled) {
@@ -289,8 +337,11 @@ async function handleDailySchedule(interaction) {
         // Format time for display
         const formattedTime = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
         
+        // Customize reply based on whether it's dynamic or static
+        const dynamicText = isDynamic ? " with a **freshly generated message each day**" : "";
+        
         return interaction.editReply({
-            content: `✅ I'll post a **${messageType}** message in ${channel} every day at **${formattedTime}** (${guildTimezone}).`,
+            content: `✅ I'll post a **${messageType}** message in ${channel} every day at **${formattedTime}** (${guildTimezone})${dynamicText}.`,
             ephemeral: true
         });
     } catch (error) {
@@ -311,6 +362,7 @@ async function handleWeeklySchedule(interaction) {
         const timeString = interaction.options.getString('time');
         const message = interaction.options.getString('message');
         const channel = interaction.options.getChannel('channel') || interaction.channel;
+        const isDynamic = interaction.options.getBoolean('dynamic') || false;
         
         // Validate the channel is a text channel
         if (!channel.isTextBased()) {
@@ -356,7 +408,8 @@ async function handleWeeklySchedule(interaction) {
             message_content: message,
             cron_schedule: cronSchedule,
             timezone: guildTimezone,
-            guild_id: interaction.guildId
+            guild_id: interaction.guildId,
+            is_dynamic: isDynamic
         });
         
         if (!scheduled) {
@@ -369,12 +422,94 @@ async function handleWeeklySchedule(interaction) {
         // Format time for display
         const formattedTime = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
         
+        // Customize reply based on whether it's dynamic or static
+        const dynamicText = isDynamic ? " with a **freshly generated message each week**" : "";
+        
         return interaction.editReply({
-            content: `✅ I'll post your custom message in ${channel} every **${day}** at **${formattedTime}** (${guildTimezone}).`,
+            content: `✅ I'll post your custom message in ${channel} every **${day}** at **${formattedTime}** (${guildTimezone})${dynamicText}.`,
             ephemeral: true
         });
     } catch (error) {
         logger.error('Error in weekly schedule command:', error);
+        return interaction.editReply({
+            content: "Sorry, something went wrong. Please try again.",
+            ephemeral: true
+        });
+    }
+}
+
+/**
+ * Handle the 'collection' subcommand
+ */
+async function handleCollectionSchedule(interaction) {
+    try {
+        const collectionName = interaction.options.getString('name');
+        const timeString = interaction.options.getString('time');
+        const messagesString = interaction.options.getString('messages');
+        const channel = interaction.options.getChannel('channel') || interaction.channel;
+        
+        // Validate the channel is a text channel
+        if (!channel.isTextBased()) {
+            return interaction.editReply({
+                content: "I can only send scheduled messages to text channels.",
+                ephemeral: true
+            });
+        }
+        
+        // Parse the time (HH:MM)
+        const [hours, minutes] = timeString.split(':').map(part => parseInt(part.trim()));
+        
+        if (isNaN(hours) || isNaN(minutes) || hours < 0 || hours > 23 || minutes < 0 || minutes > 59) {
+            return interaction.editReply({
+                content: "Please provide a valid time in 24-hour format (e.g., '8:00' or '15:30').",
+                ephemeral: true
+            });
+        }
+        
+        // Split messages by pipe character
+        const messageCollection = messagesString.split('|').map(msg => msg.trim()).filter(msg => msg.length > 0);
+        
+        // Ensure we have at least one message
+        if (messageCollection.length === 0) {
+            return interaction.editReply({
+                content: "Please provide at least one message in the collection.",
+                ephemeral: true
+            });
+        }
+        
+        // Get the timezone for the guild/server
+        const guildTimezone = await getGuildTimezone(interaction.guildId, interaction.client) || 'America/Chicago';
+        
+        // Create cron schedule for daily at the specified time
+        const cronSchedule = `${minutes} ${hours} * * *`;
+        
+        // Create the scheduled message with collection
+        const scheduled = await createScheduledMessage({
+            channel_id: channel.id,
+            message_type: 'collection',
+            cron_schedule: cronSchedule,
+            timezone: guildTimezone,
+            guild_id: interaction.guildId,
+            using_collection: true,
+            message_collection: messageCollection
+        });
+        
+        if (!scheduled) {
+            return interaction.editReply({
+                content: "Sorry, I couldn't create that message collection. Please try again.",
+                ephemeral: true
+            });
+        }
+        
+        // Format time for display
+        const formattedTime = `${hours.toString().padStart(2, '0')}:${minutes.toString().padStart(2, '0')}`;
+        
+        return interaction.editReply({
+            content: `✅ I've created the **${collectionName}** collection with **${messageCollection.length} messages**. I'll randomly select one to post in ${channel} every day at **${formattedTime}** (${guildTimezone}).`,
+            ephemeral: true
+        });
+    } catch (error) {
+        logger.error('Error in collection schedule command:', error);
         return interaction.editReply({
             content: "Sorry, something went wrong. Please try again.",
             ephemeral: true
@@ -531,11 +666,33 @@ async function handleListSchedule(interaction) {
         formattedList += `Channel: ${channelName}\n`;
         formattedList += `${scheduleDesc} (${msg.timezone})\n`;
         
+        // Check if this is a dynamic or collection message
+        let messageTypeLabel = "";
+        if (msg.is_dynamic === true) {
+          messageTypeLabel = " (Dynamic - new message each time)";
+        } else if (msg.using_collection === true) {
+          messageTypeLabel = " (Collection - random message selection)";
+        }
+        
         // Add a preview of the message content (truncated if too long)
-        const contentPreview = msg.message_content.length > 50 
-          ? msg.message_content.substring(0, 50) + "..." 
-          : msg.message_content;
-        formattedList += `Message: ${contentPreview}\n\n`;
+        if (msg.using_collection === true) {
+          // Get the collection count
+          try {
+            const { count, error } = await supabase
+              .from(TABLE_NAMES.MESSAGE_COLLECTIONS)
+              .select('content', { count: 'exact' })
+              .eq('message_id', msg.id);
+              
+            formattedList += `Message: Collection with ${count || '?'} messages${messageTypeLabel}\n\n`;
+          } catch (error) {
+            formattedList += `Message: Collection (count unavailable)${messageTypeLabel}\n\n`;
+          }
+        } else {
+          const contentPreview = msg.message_content && msg.message_content.length > 50 
+            ? msg.message_content.substring(0, 50) + "..." 
+            : (msg.message_content || '(Generated dynamically)');
+          formattedList += `Message: ${contentPreview}${messageTypeLabel}\n\n`;
+        }
       }
       
       // Add instructions for canceling

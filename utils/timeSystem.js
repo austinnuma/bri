@@ -21,7 +21,8 @@ const DEFAULT_TIMEZONE = 'America/Chicago';
 const TABLE_NAMES = {
     USER_TIMEZONE: 'user_timezones',
     EVENTS: 'bri_events',
-    SCHEDULED_MESSAGES: 'bri_scheduled_messages'
+    SCHEDULED_MESSAGES: 'bri_scheduled_messages',
+    MESSAGE_COLLECTIONS: 'bri_message_collections'
   };
   
 // Static core prompt for AI interactions
@@ -493,10 +494,17 @@ export async function createScheduledMessage(messageData) {
   try {
     // Validate required fields
     if (!messageData.channel_id || !messageData.message_type || 
-        !messageData.message_content || !messageData.cron_schedule) {
+        !messageData.cron_schedule) {
       logger.error("Missing required fields for scheduled message creation:", messageData);
       return null;
     }
+    
+    // Check if this is a dynamic message
+    const isDynamic = messageData.is_dynamic === true;
+    
+    // Check if this message uses a collection
+    const isCollection = Array.isArray(messageData.message_collection) && 
+                        messageData.message_collection.length > 0;
     
     // Create the scheduled message
     const { data, error } = await supabase
@@ -504,10 +512,13 @@ export async function createScheduledMessage(messageData) {
       .insert({
         channel_id: messageData.channel_id,
         message_type: messageData.message_type,
-        message_content: messageData.message_content,
+        message_content: !isCollection ? messageData.message_content : null,
         cron_schedule: messageData.cron_schedule,
         timezone: messageData.timezone || DEFAULT_TIMEZONE,
-        is_active: true
+        is_active: true,
+        guild_id: messageData.guild_id,
+        is_dynamic: isDynamic,
+        using_collection: isCollection
       })
       .select()
       .single();
@@ -515,6 +526,32 @@ export async function createScheduledMessage(messageData) {
     if (error) {
       logger.error("Error creating scheduled message:", error);
       return null;
+    }
+    
+    // If this message uses a collection, store the messages in a separate table
+    if (isCollection) {
+      const messageCollection = messageData.message_collection.map(message => ({
+        message_id: data.id,
+        content: message
+      }));
+      
+      const { error: collectionError } = await supabase
+        .from(TABLE_NAMES.MESSAGE_COLLECTIONS)
+        .insert(messageCollection);
+        
+      if (collectionError) {
+        logger.error("Error creating message collection:", collectionError);
+        
+        // Clean up the scheduled message since collection failed
+        await supabase
+          .from(TABLE_NAMES.SCHEDULED_MESSAGES)
+          .delete()
+          .eq('id', data.id);
+          
+        return null;
+      }
+      
+      logger.info(`Added ${messageCollection.length} messages to collection for scheduled message ${data.id}`);
     }
     
     logger.info(`Created new scheduled message in channel ${data.channel_id}`);
@@ -1163,12 +1200,60 @@ async function sendScheduledMessage(scheduledMessage) {
       return;
     }
     
+    // Determine what message content to send
+    let messageContent;
+    
+    // Check if this message uses a collection
+    if (scheduledMessage.using_collection === true) {
+      // Get all messages from the collection
+      const { data: messageCollection, error } = await supabase
+        .from(TABLE_NAMES.MESSAGE_COLLECTIONS)
+        .select('content')
+        .eq('message_id', scheduledMessage.id);
+        
+      if (error || !messageCollection || messageCollection.length === 0) {
+        logger.error(`Error fetching message collection for message ${scheduledMessage.id}:`, error);
+        // Fallback to the stored message content if available
+        messageContent = scheduledMessage.message_content || "Sorry, I couldn't find the message content.";
+      } else {
+        // Pick a random message from the collection
+        const randomIndex = Math.floor(Math.random() * messageCollection.length);
+        messageContent = messageCollection[randomIndex].content;
+        logger.info(`Selected random message ${randomIndex + 1}/${messageCollection.length} from collection for message ${scheduledMessage.id}`);
+      }
+    } 
+    // Check if this is a dynamic message that should be generated
+    else if (scheduledMessage.is_dynamic === true) {
+      // Generate a dynamic message based on message type
+      messageContent = await generateDynamicMessage(scheduledMessage.message_type);
+      logger.info(`Generated dynamic message for scheduled message ${scheduledMessage.id}`);
+    }
+    // Otherwise, use the stored message content
+    else {
+      messageContent = scheduledMessage.message_content;
+    }
+    
     // Send the message
-    await channel.send(scheduledMessage.message_content);
+    await channel.send(messageContent);
     
     logger.info(`Sent scheduled message to channel ${scheduledMessage.channel_id}`);
   } catch (error) {
     logger.error(`Error sending scheduled message ${scheduledMessage.id}:`, error);
+  }
+}
+
+/**
+ * Generates a dynamic message based on message type
+ * @param {string} messageType - Type of message to generate
+ * @returns {Promise<string>} - Generated message content
+ */
+async function generateDynamicMessage(messageType) {
+  try {
+    // For now, we'll reuse the greeting generator function
+    return await generateGreeting(messageType);
+  } catch (error) {
+    logger.error(`Error generating dynamic message for type ${messageType}:`, error);
+    return `Hello everyone! I hope you're having a great day! 😊`;
   }
 }
 
