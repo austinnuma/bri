@@ -1384,18 +1384,24 @@ function scheduleContextualEntry(hour, minute, guildId, timezone = 'America/New_
           });
           
           // Update the last_run timestamp in the database
-          const { error: updateError } = await supabase
-            .from('scheduled_journal_entries')
-            .update({
-              last_run: new Date().toISOString()
-            })
-            .eq('guild_id', guildId)
-            .eq('entry_type', entryType)
-            .eq('hour', hour)
-            .eq('minute', minute);
-            
-          if (updateError) {
-            logger.error(`Error updating last_run for journal schedule:`, updateError);
+          try {
+            const { error: updateError } = await supabase
+              .from('scheduled_journal_entries')
+              .update({
+                last_run: new Date().toISOString()
+              })
+              .eq('guild_id', guildId)
+              .eq('entry_type', entryType)
+              .eq('hour', hour)
+              .eq('minute', minute);
+              
+            if (updateError) {
+              logger.error(`Error updating last_run for journal schedule:`, updateError);
+            }
+          } catch (supabaseError) {
+            // Handle network errors or Supabase connectivity issues
+            logger.error(`Network error updating last_run for journal schedule: ${supabaseError.message}`);
+            // This is non-critical, so we'll continue execution anyway
           }
           
           logger.info(`Successfully processed scheduled ${entryType} journal entry for guild ${guildId}`);

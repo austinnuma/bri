@@ -830,7 +830,7 @@ export function formatEnhancedMemoriesForPrompt(enhancedMemories) {
  * Schedule regular memory graph building
  * @param {number} intervalHours - Hours between runs
  */
-export function scheduleMemoryGraphBuilding(intervalHours = 0.1) {
+export function scheduleMemoryGraphBuilding(intervalHours = 24) {
   const intervalMs = intervalHours * 60 * 60 * 1000;
   
   setInterval(async () => {
