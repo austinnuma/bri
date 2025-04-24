@@ -917,14 +917,23 @@ export function formatMemoriesWithTemporal(memories) {
   return result.trim();
 }
 
+// Track the timer to prevent duplicate schedules
+let temporalAnalysisTimer = null;
+
 /**
  * Schedule regular temporal analysis of memories
  * @param {number} intervalHours - Hours between runs
  */
 export function scheduleTemporalAnalysis(intervalHours = 12) {
+  // Clear any existing timer to prevent duplicates
+  if (temporalAnalysisTimer) {
+    clearInterval(temporalAnalysisTimer);
+    logger.info("Cleared existing temporal analysis timer");
+  }
+  
   const intervalMs = intervalHours * 60 * 60 * 1000;
   
-  setInterval(async () => {
+  temporalAnalysisTimer = setInterval(async () => {
     try {
       logger.info(`Running scheduled temporal analysis of memories`);
       
@@ -937,5 +946,5 @@ export function scheduleTemporalAnalysis(intervalHours = 12) {
     }
   }, intervalMs);
   
-  //logger.info(`Temporal analysis scheduled to run every ${intervalHours} hours`);
+  logger.info(`Temporal analysis scheduled to run every ${intervalHours} hours`);
 }
