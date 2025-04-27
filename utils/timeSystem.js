@@ -1249,11 +1249,125 @@ async function sendScheduledMessage(scheduledMessage) {
  */
 async function generateDynamicMessage(messageType) {
   try {
-    // For now, we'll reuse the greeting generator function
-    return await generateGreeting(messageType);
+    // Process different types of dynamic messages
+    const type = messageType.toLowerCase();
+    
+    // Time-based greetings (morning, evening, etc.)
+    const timeBasedTypes = ['morning', 'afternoon', 'evening', 'night', 'weekend'];
+    if (timeBasedTypes.includes(type)) {
+      return await generateGreeting(type);
+    }
+    
+    // Handle other types of dynamic messages
+    const prompt = `
+Generate a friendly, conversational message from Bri, a 14-year-old AI assistant.
+This is for a scheduled message with the type/theme: "${messageType}".
+
+Guidelines:
+- Keep it brief (2-3 sentences max)
+- Include appropriate emoji(s)
+- Sound natural and conversational, like a 14-year-old would write
+- Make it feel fresh and unique, not generic
+- Include a question or conversation starter when appropriate
+- Don't include a signature
+
+The message should be warm, friendly, and engaging.`;
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [
+        { role: "system", content: "You are Bri, a helpful AI assistant with the personality of a 14-year-old girl. You create varied, natural-sounding messages." },
+        { role: "user", content: prompt }
+      ],
+      max_tokens: 200,
+      temperature: 0.8, // Higher temperature for more variety
+    });
+    
+    return completion.choices[0].message.content.trim();
   } catch (error) {
     logger.error(`Error generating dynamic message for type ${messageType}:`, error);
     return `Hello everyone! I hope you're having a great day! 😊`;
+  }
+}
+
+/**
+ * Generates a greeting message based on type
+ * @param {string} type - Type of greeting (morning, afternoon, evening, etc.)
+ * @returns {Promise<string>} - Generated greeting message
+ */
+async function generateGreeting(type) {
+  try {
+    // Standardize type to lowercase
+    const greetingType = type.toLowerCase();
+    
+    // Define characteristics and context for different greeting types
+    const greetingContexts = {
+      morning: {
+        time: "morning",
+        tone: "energetic and cheerful",
+        themes: "starting the day, breakfast, plans for the day, sunshine, new beginnings",
+        emoji: "morning-related like 🌞, 🌅, ☀️, 🌻, 🐦"
+      },
+      afternoon: {
+        time: "afternoon",
+        tone: "friendly and casual",
+        themes: "lunch, mid-day activities, how the day is going so far, afternoon breaks",
+        emoji: "afternoon-related like ☀️, 🌤️, 🌈, 👋, 😊"
+      },
+      evening: {
+        time: "evening",
+        tone: "warm and reflective",
+        themes: "winding down, dinner, reflection on the day, relaxation",
+        emoji: "evening-related like 🌙, 🌆, 🌇, ✨, 🦉"
+      },
+      night: {
+        time: "night",
+        tone: "calm and peaceful",
+        themes: "sleep, rest, dreams, relaxation, end of day",
+        emoji: "night-related like 💤, 🌙, 🌃, 😴, ✨"
+      },
+      weekend: {
+        time: "weekend",
+        tone: "excited and relaxed",
+        themes: "free time, fun activities, relaxation, hobbies, friend hangouts",
+        emoji: "weekend-related like 🎉, 🥳, 🎊, 🌈, 🎮"
+      }
+    };
+    
+    // Get context for this greeting type (default to afternoon if not found)
+    const context = greetingContexts[greetingType] || greetingContexts.afternoon;
+    
+    // Generate a unique greeting using OpenAI
+    const prompt = `
+Generate a friendly, casual greeting message as if from Bri, a 14-year-old AI assistant.
+This is for a ${context.time} greeting.
+
+Guidelines:
+- Use a ${context.tone} tone
+- Keep it brief (1-2 sentences)
+- Focus on themes like: ${context.themes}
+- Include an appropriate emoji (${context.emoji})
+- Make it sound natural and conversational, like how a 14-year-old would talk
+- Make it feel personal and warm
+- Don't use the same greeting patterns repeatedly
+- Don't include a signature - just the greeting message
+
+The message should feel fresh and unique, not generic.`;
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-3.5-turbo",
+      messages: [
+        { role: "system", content: "You are Bri, a helpful AI assistant with the personality of a 14-year-old girl. You create varied, natural-sounding greetings." },
+        { role: "user", content: prompt }
+      ],
+      max_tokens: 150,
+      temperature: 0.8, // Higher temperature for more variety
+    });
+    
+    return completion.choices[0].message.content.trim();
+  } catch (error) {
+    logger.error(`Error generating greeting for type ${type}:`, error);
+    return `Hey everyone! 👋 Hope you're all doing great today!`;
   }
 }
 
