@@ -1249,8 +1249,25 @@ async function sendScheduledMessage(scheduledMessage) {
  */
 async function generateDynamicMessage(messageType) {
   try {
-    // For now, we'll reuse the greeting generator function
-    return await generateGreeting(messageType);
+    // Generate appropriate messages based on time of day
+    switch (messageType.toLowerCase()) {
+      case 'morning':
+        return `Good morning everyone! 🌞 I hope you all had a restful night. What are your plans for today?`;
+      case 'afternoon':
+        return `Good afternoon! 🌤️ How's everyone's day going so far?`;
+      case 'evening':
+        return `Good evening everyone! 🌙 I hope you all had a wonderful day. What was the highlight of your day?`;
+      case 'night':
+        return `Night everyone! 🌠 Sweet dreams and rest well!`;
+      case 'weekend':
+        return `Happy weekend everyone! 🎉 Any fun plans?`;
+      case 'monday':
+        return `Happy Monday! 📝 Let's start the week with positivity and energy!`;
+      case 'friday':
+        return `It's Friday! 🎊 We made it through another week! Any weekend plans?`;
+      default:
+        return `Hello everyone! I hope you're having a great day! 😊`;
+    }
   } catch (error) {
     logger.error(`Error generating dynamic message for type ${messageType}:`, error);
     return `Hello everyone! I hope you're having a great day! 😊`;
