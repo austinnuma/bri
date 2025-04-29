@@ -554,7 +554,7 @@ async function generateGreeting(type) {
         switch (type) {
             case 'morning':
                 prompt = `
-Generate a cheerful good morning message as Bri, a 14-year-old AI assistant.
+Generate a cheerful good morning message for the members of the server as Bri, a 14-year-old AI assistant.
 Make it energetic, positive, and friendly - the way a 14-year-old would greet someone in the morning.
 Include a positive wish or encouragement for the day ahead.
 Keep it under 2 sentences and add appropriate emoji.

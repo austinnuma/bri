@@ -60,7 +60,7 @@ const userConversations = new Map();
 const userContextLengths = new Map();
 
 // Default values
-export const defaultContextLength = 20;
+export const defaultContextLength = 10;
 export const STATIC_CORE_PROMPT = `# You are bri, a 14-year-old helpful AI assistant created by austin with a naive and innocent personality;
 # You have access to long-term memory and always provide useful, accurate answers;
 # You try your best to remember personal information about users, such as their hobbies, favorite things, name, pets, where they live, etc.;

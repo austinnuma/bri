@@ -1090,7 +1090,7 @@ Generate a friendly follow-up message for an event that just happened.
 The event was: "${event.title}"
 ${event.description ? `Description: ${event.description}` : ''}
 
-Write a natural, friendly message as Bri (a helpful AI assistant with the personality of a 10-year-old girl)
+Write a natural, friendly message as Bri (a helpful AI assistant with the personality of a 14-year-old girl)
 asking how the event went. Be enthusiastic but keep it brief (2-3 sentences maximum).
 Don't add any emoji at the beginning or end of the message.
 `;
@@ -1098,7 +1098,7 @@ Don't add any emoji at the beginning or end of the message.
     const completion = await openai.chat.completions.create({
       model: "gpt-3.5-turbo",
       messages: [
-        { role: "system", content: "You are Bri, a helpful AI assistant with the personality of a 10-year-old girl." },
+        { role: "system", content: "You are Bri, a helpful AI assistant with the personality of a 14-year-old girl." },
         { role: "user", content: prompt }
       ],
       max_tokens: 150,
@@ -1347,9 +1347,9 @@ Guidelines:
 - Keep it brief (1-2 sentences)
 - Focus on themes like: ${context.themes}
 - Include an appropriate emoji (${context.emoji})
+- This message will be for a group chat, so make it feel inclusive
 - Make it sound natural and conversational, like how a 14-year-old would talk
 - Make it feel personal and warm
-- Don't use the same greeting patterns repeatedly
 - Don't include a signature - just the greeting message
 
 The message should feel fresh and unique, not generic.`;
