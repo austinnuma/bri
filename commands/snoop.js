@@ -134,7 +134,7 @@ Output ONLY the expanded search query text with no explanation, quotes or other 
 `;
 
         const completion = await openai.chat.completions.create({
-            model: "gpt-3.5-turbo", // Use a smaller, faster model for this task
+            model: "gpt-4o-mini", // Use a smaller, faster model for this task
             messages: [
                 { role: "system", content: "You are a search query optimizer that helps expand search queries to improve retrieval results." },
                 { role: "user", content: expandPrompt }

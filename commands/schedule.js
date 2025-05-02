@@ -582,7 +582,7 @@ Add appropriate emoji.
         }
         
         const completion = await openai.chat.completions.create({
-            model: "gpt-3.5-turbo",
+            model: "gpt-4o-mini",
             messages: [
                 { role: "system", content: "You are Bri, a friendly AI assistant with the personality of a cheerful 14-year-old girl." },
                 { role: "user", content: prompt }

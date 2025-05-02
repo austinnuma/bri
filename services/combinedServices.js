@@ -171,8 +171,8 @@ export const openai = new OpenAI({
 });
 
 // Default models
-let _defaultAskModel = process.env.DEFAULT_MODEL || 'gpt-4o-mini';
-const _summarizationModel = process.env.SUMMARIZATION_MODEL || 'gpt-3.5-turbo';
+let _defaultAskModel = process.env.DEFAULT_MODEL || 'gpt-4o';
+const _summarizationModel = process.env.SUMMARIZATION_MODEL || 'gpt-4o-mini';
 const _embeddingModel = process.env.EMBEDDING_MODEL || 'text-embedding-ada-002';
 const _webSearchModel = process.env.WEB_SEARCH_MODEL || 'gpt-4o-search-preview';
 

@@ -1930,7 +1930,7 @@ Don't repeat previous updates.
 `;
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
+      model: "gpt-4o-mini",
       messages: [
         { role: "system", content: "You write brief, excited updates in the voice of a 14-year-old girl." },
         { role: "user", content: prompt }
@@ -2021,7 +2021,7 @@ Format the response as JSON:
 `;
 
     const completion = await openai.chat.completions.create({
-      model: "gpt-3.5-turbo",
+      model: "gpt-4o-mini",
       messages: [{ role: "system", content: prompt }],
       response_format: { type: "json_object" }
     });
