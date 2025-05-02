@@ -6,6 +6,7 @@
   "dependencies": {
     "@google/generative-ai": "^0.22.0",
     "@supabase/supabase-js": "^2.48.1",
+    "axios": "^1.9.0",
     "chrono-node": "^2.7.8",
     "date-fns": "^2.16.0",
     "date-fns-tz": "^2.0.0",
