@@ -285,7 +285,25 @@ async function handleImageAttachments(message, cleanedContent, guildId, threadId
     // Get conversation history for this user using write-through cache
     let conversationHistory = await getUserConversation(message.author.id, guildId, threadId) || [];
     
-    // Use the enhanced analyzeImages function with conversation context
+    // First add the user's message with images to conversation history
+    // This ensures the current question is part of the context for image analysis
+    if (conversationHistory.length > 0) {
+      conversationHistory.push({ 
+        role: "user", 
+        content: cleanedContent 
+          ? `${cleanedContent} [Attached ${imageUrls.length} image(s)]` 
+          : `[Attached ${imageUrls.length} image(s)]` 
+      });
+      
+      // Apply context length limits if needed
+      const contextLength = await getUserContextLength(message.author.id, guildId) || defaultContextLength;
+      if (conversationHistory.length > contextLength) {
+        conversationHistory = [conversationHistory[0], ...conversationHistory.slice(-(contextLength - 1))];
+      }
+    }
+    
+    // Use the enhanced analyzeImages function with updated conversation context
+    // This ensures the user's question guides the image analysis
     const imageDescription = await analyzeImages(
       imageUrls,
       cleanedContent || "",
@@ -298,17 +316,8 @@ async function handleImageAttachments(message, cleanedContent, guildId, threadId
     // No longer caching image URLs, we'll directly reprocess from the original message
     logger.info(`Processed ${imageUrls.length} images for user ${message.author.id} in guild ${guildId}`);
     
-    // Update conversation history with this interaction
+    // Add Bri's response to conversation history
     if (conversationHistory.length > 0) {
-      // First add the user's message with images
-      conversationHistory.push({ 
-        role: "user", 
-        content: cleanedContent 
-          ? `${cleanedContent} [Attached ${imageUrls.length} image(s)]` 
-          : `[Attached ${imageUrls.length} image(s)]` 
-      });
-      
-      // Then add Bri's response
       conversationHistory.push({ 
         role: "assistant", 
         content: imageDescription 
@@ -448,7 +457,23 @@ export async function handleLegacyMessage(message) {
             // Get conversation history for this user using write-through cache
             let conversationHistory = await getUserConversation(message.author.id, guildId, threadId) || [];
             
-            // Analyze the images again with the new prompt
+            // First add the user's message to conversation history for context
+            // This ensures the current question is part of the context for image analysis
+            if (conversationHistory.length > 0) {
+              conversationHistory.push({ 
+                role: "user", 
+                content: `${cleanedContent} [Asking about the ${imageUrls.length > 1 ? 'images' : 'image'} shown previously]` 
+              });
+            }
+            
+            // Apply context length limits if needed
+            const contextLength = await getUserContextLength(message.author.id, guildId) || defaultContextLength;
+            if (conversationHistory.length > contextLength) {
+              conversationHistory = [conversationHistory[0], ...conversationHistory.slice(-(contextLength - 1))];
+            }
+            
+            // Now analyze the images with the updated conversation context
+            // This ensures the user's specific question guides the image analysis
             const imageDescription = await analyzeImages(
               imageUrls,
               cleanedContent || "Tell me more about this image",
@@ -458,25 +483,12 @@ export async function handleLegacyMessage(message) {
             // Send the response
             const response = await message.reply(imageDescription);
             
-            // Update conversation history with this interaction
+            // Add Bri's response to conversation history
             if (conversationHistory.length > 0) {
-              // First add the user's message with reference to the replied-to images
-              conversationHistory.push({ 
-                role: "user", 
-                content: `${cleanedContent} [Referring to previously shared ${imageUrls.length > 1 ? 'images' : 'image'} in message being replied to]` 
-              });
-              
-              // Then add Bri's response
               conversationHistory.push({ 
                 role: "assistant", 
                 content: imageDescription 
               });
-              
-              // Apply context length limits if needed
-              const contextLength = await getUserContextLength(message.author.id, guildId) || defaultContextLength;
-              if (conversationHistory.length > contextLength) {
-                conversationHistory = [conversationHistory[0], ...conversationHistory.slice(-(contextLength - 1))];
-              }
               
               // Save the updated conversation
               await setUserConversation(message.author.id, guildId, conversationHistory, threadId);
