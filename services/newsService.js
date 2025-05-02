@@ -48,7 +48,6 @@ export async function fetchPoliticalNews(maxArticles = 10) {
       web_search_options: {
         search_context_size: "high", // Maximum context for comprehensive results
       },
-      temperature: 0.1, // Low temperature for factual responses
       max_tokens: 3000,
     });
     
