@@ -306,6 +306,10 @@ export function getCacheStats() {
       size: queryCache.size,
       maxSize: queryCache.max
     },
+    imageCache: {
+      size: imageCache.size,
+      maxSize: imageCache.max
+    },
     // Return a timestamp for when the stats were generated
     timestamp: new Date().toISOString()
   };
@@ -516,45 +520,11 @@ export function getCachedUserImages(userId, guildId) {
   }
 }
 
-/**
- * Get enhanced cache statistics including the new image cache
- * @returns {Object} - Cache statistics
- */
-function getEnhancedCacheStats() {
-  return {
-    userCache: {
-      size: userDataCache.size,
-      maxSize: userDataCache.max,
-      // Show a sample of what's in the cache
-      sampleKeys: Array.from(userDataCache.keys()).slice(0, 5)
-    },
-    memoryCache: {
-      size: memoryCache.size,
-      maxSize: memoryCache.max
-    },
-    vectorSearchCache: {
-      size: vectorSearchCache.size,
-      maxSize: vectorSearchCache.max
-    },
-    queryCache: {
-      size: queryCache.size,
-      maxSize: queryCache.max
-    },
-    imageCache: {
-      size: imageCache.size,
-      maxSize: imageCache.max
-    },
-    // Return a timestamp for when the stats were generated
-    timestamp: new Date().toISOString()
-  };
-}
-
 // Export all functions to make this a complete replacement
 export {
   userDataCache,
   memoryCache,
   vectorSearchCache,
   queryCache,
-  imageCache,
-  getEnhancedCacheStats as getCacheStats
+  imageCache
 };
