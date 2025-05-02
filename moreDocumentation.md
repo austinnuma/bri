@@ -41,7 +41,6 @@ Bri has a dynamic character that evolves through interactions.
 - **Relationship Levels**: Tracks progression from Stranger → Acquaintance → Friendly → Friend → Close Friend
 - **Interests System**: Bri has interests that develop over time
 - **Storylines**: Ongoing narrative elements (science fair project, learning chess)
-- **Inside Jokes**: Detected and remembered for closer relationships
 
 **How It Works:**
 - Interests are stored with levels, facts, and associated tags
