@@ -32,6 +32,13 @@ const queryCache = new LRUCache({
   updateAgeOnGet: true
 });
 
+// Configure image cache for recent user images
+const imageCache = new LRUCache({
+  max: 500,            // Store up to 500 image references
+  ttl: 60 * 60 * 1000, // 60 minute TTL - keep images in cache longer
+  updateAgeOnGet: true // Reset TTL when accessed
+});
+
 /**
  * Generate a cache key for a given query
  * @param {string} table - Table name
@@ -450,10 +457,103 @@ export function invalidateTableCache(table) {
   logger.debug(`Invalidated cache for table ${table}`);
 }
 
+/**
+ * Store image URLs for a specific user
+ * @param {string} userId - User ID
+ * @param {string} guildId - Guild ID
+ * @param {Array<string>} imageUrls - Array of image URLs
+ * @param {string} messageId - Original message ID containing the images
+ * @returns {void}
+ */
+export function cacheUserImages(userId, guildId, imageUrls, messageId) {
+  if (!userId || !guildId || !imageUrls || imageUrls.length === 0) {
+    logger.warn('cacheUserImages called with missing parameters');
+    return;
+  }
+  
+  try {
+    const cacheKey = `images:${userId}:${guildId}`;
+    
+    // Store information about the images
+    const imageData = {
+      imageUrls: imageUrls,
+      messageId: messageId,
+      timestamp: Date.now()
+    };
+    
+    // Save to cache
+    imageCache.set(cacheKey, imageData);
+    logger.debug(`Cached ${imageUrls.length} images for user ${userId} in guild ${guildId}`);
+  } catch (error) {
+    logger.error(`Error caching images for user ${userId} in guild ${guildId}:`, error);
+  }
+}
+
+/**
+ * Retrieve cached image URLs for a user
+ * @param {string} userId - User ID
+ * @param {string} guildId - Guild ID
+ * @returns {Object|null} - Object containing image URLs and message ID, or null if not found
+ */
+export function getCachedUserImages(userId, guildId) {
+  if (!userId || !guildId) {
+    logger.warn('getCachedUserImages called with missing parameters');
+    return null;
+  }
+  
+  try {
+    const cacheKey = `images:${userId}:${guildId}`;
+    
+    // Check if we have cached images for this user
+    if (imageCache.has(cacheKey)) {
+      return imageCache.get(cacheKey);
+    }
+    
+    return null; // No cached images found
+  } catch (error) {
+    logger.error(`Error retrieving cached images for user ${userId} in guild ${guildId}:`, error);
+    return null;
+  }
+}
+
+/**
+ * Get cache statistics
+ * @returns {Object} - Cache statistics
+ */
+export function getCacheStats() {
+  return {
+    userCache: {
+      size: userDataCache.size,
+      maxSize: userDataCache.max,
+      // Show a sample of what's in the cache
+      sampleKeys: Array.from(userDataCache.keys()).slice(0, 5)
+    },
+    memoryCache: {
+      size: memoryCache.size,
+      maxSize: memoryCache.max
+    },
+    vectorSearchCache: {
+      size: vectorSearchCache.size,
+      maxSize: vectorSearchCache.max
+    },
+    queryCache: {
+      size: queryCache.size,
+      maxSize: queryCache.max
+    },
+    imageCache: {
+      size: imageCache.size,
+      maxSize: imageCache.max
+    },
+    // Return a timestamp for when the stats were generated
+    timestamp: new Date().toISOString()
+  };
+}
+
 // Export all functions to make this a complete replacement
 export {
   userDataCache,
   memoryCache,
   vectorSearchCache,
-  queryCache
+  queryCache,
+  imageCache
 };

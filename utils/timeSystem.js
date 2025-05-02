@@ -5,6 +5,12 @@ import { openai } from '../services/combinedServices.js';
 import { supabase } from '../services/combinedServices.js';
 import { getServerConfig } from './serverConfigManager.js';
 import { getCharacterSheetForPrompt } from './userCharacterSheet.js';
+import { 
+  getActivePoliticsGuilds, 
+  isPoliticsSummaryDue, 
+  generateAndSendPoliticsSummary, 
+  setupPoliticsTables 
+} from '../services/newsService.js';
 
 let discordClientRef = null;
 
@@ -1975,6 +1981,7 @@ export async function markUnpromptedSent(eventId) {
   }
 }
 
+
 export async function processTimeAwareEventsEnhanced() {
   try {
     //logger.info("Processing time-aware events...");
@@ -1987,8 +1994,50 @@ export async function processTimeAwareEventsEnhanced() {
     // New step: Process context events for unprompted messages
     await processContextEventsForUnprompted();
     
+    // New step: Process political news summaries
+    await processPoliticalNewsSummaries();
+    
     //logger.info("Finished processing time-aware events");
   } catch (error) {
     logger.error("Error in processTimeAwareEventsEnhanced:", error);
+  }
+}
+
+/**
+ * Process political news summaries for all guilds that have them enabled
+ */
+async function processPoliticalNewsSummaries() {
+  try {
+    // Ensure the tables are set up
+    await setupPoliticsTables();
+    
+    // Get all guilds with politics enabled
+    const activeGuilds = await getActivePoliticsGuilds();
+    
+    if (!activeGuilds || activeGuilds.length === 0) {
+      return; // No active guilds
+    }
+    
+    //logger.debug(`Found ${activeGuilds.length} guilds with political news enabled`);
+    
+    // Check each guild
+    for (const guildSettings of activeGuilds) {
+      try {
+        // Check if a summary is due
+        const isDue = await isPoliticsSummaryDue(guildSettings);
+        
+        if (isDue) {
+          logger.info(`Political news summary is due for guild ${guildSettings.guild_id}`);
+          
+          // Generate and send the summary
+          await generateAndSendPoliticsSummary(guildSettings, discordClientRef);
+        }
+      } catch (guildError) {
+        logger.error(`Error processing political news for guild ${guildSettings.guild_id}:`, guildError);
+        // Continue with next guild
+      }
+    }
+  } catch (error) {
+    logger.error('Error processing political news summaries:', error);
   }
 }

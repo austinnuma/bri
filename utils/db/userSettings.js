@@ -4,7 +4,7 @@ import { logger } from '../logger.js';
 import { defaultContextLength, STATIC_CORE_PROMPT } from '../unifiedMemoryManager.js';
 import { LRUCache } from 'lru-cache';
 
-import { getCachedUser, invalidateUserCache } from '../cacheManager.js';
+import { getCachedUser, invalidateUserCache, cacheUserImages, getCachedUserImages } from '../cacheManager.js';
 
 // Configure caches for different types of user data
 const userConversationCache = new LRUCache({
@@ -643,3 +643,6 @@ export function getUserCacheStats() {
     }
   };
 }
+
+// Re-export image cache functions
+export { cacheUserImages, getCachedUserImages };

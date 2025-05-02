@@ -8,16 +8,20 @@ export const CREDIT_COSTS = {
   CHAT_MESSAGE: 1,
   IMAGE_GENERATION: 10,
   GEMINI_QUERY: 5,
+  WEB_SEARCH: 5,  // OpenAI web search costs the same as Gemini
   REMINDER_CREATION: 2,
   SCHEDULING: 3,
-  VISION_ANALYSIS: 5
+  VISION_ANALYSIS: 5,
+  POLITICS_NEWS: 3  // Same cost as regular scheduling
 };
 
 // Dictionary of features that can be used without credits with a subscription
 const SUBSCRIPTION_FREE_FEATURES = {
   'REMINDER_CREATION': SUBSCRIPTION_FEATURES.UNLIMITED_REMINDERS,
   'SCHEDULING': SUBSCRIPTION_FEATURES.UNLIMITED_SCHEDULING,
-  'VISION_ANALYSIS': SUBSCRIPTION_FEATURES.UNLIMITED_VISION
+  'VISION_ANALYSIS': SUBSCRIPTION_FEATURES.UNLIMITED_VISION,
+  'WEB_SEARCH': SUBSCRIPTION_FEATURES.UNLIMITED_VISION,  // Make web search free with the same subscription as vision
+  'POLITICS_NEWS': SUBSCRIPTION_FEATURES.UNLIMITED_SCHEDULING  // Make politics news free with scheduling subscription
 };
 
 // Initialize credit system

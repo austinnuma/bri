@@ -17,7 +17,9 @@ import {
   getUserDynamicPrompt,
   setUserDynamicPrompt,
   batchGetUserSettings, // Import the batch function
-  warmupUserCache as warmupUserSettingsCache // Renamed for clarity
+  warmupUserCache as warmupUserSettingsCache, // Renamed for clarity
+  cacheUserImages,
+  getCachedUserImages
 } from './db/userSettings.js';
 import { splitMessage, replaceEmoticons } from './textUtils.js';
 import { openai, getChatCompletion, defaultAskModel, supabase } from '../services/combinedServices.js';
@@ -295,6 +297,11 @@ async function handleImageAttachments(message, cleanedContent, guildId, threadId
     // Send the response
     const response = await message.reply(imageDescription);
     
+    // Cache these image URLs so they can be referenced in future messages
+    // This enables the "image persistence" feature
+    cacheUserImages(message.author.id, guildId, imageUrls, message.id);
+    logger.info(`Cached ${imageUrls.length} images for user ${message.author.id} in guild ${guildId}`);
+    
     // Update conversation history with this interaction
     if (conversationHistory.length > 0) {
       // First add the user's message with images
@@ -430,7 +437,61 @@ export async function handleLegacyMessage(message) {
       // Fetch the message being replied to
       const repliedToMessage = await message.channel.messages.fetch(message.reference.messageId);
       
-      // Skip if it's a reply to the bot (already handled by isReplyToBot)
+      // First handle replies to the bot's messages (which may reference previous images)
+      if (repliedToMessage.author.id === message.client.user.id) {
+        // If this is a reply to the bot and the message doesn't have its own images
+        if (message.attachments.filter(isImageAttachment).size === 0) {
+          // Check if the user has cached images from a previous message
+          const cachedImageData = getCachedUserImages(message.author.id, guildId);
+          
+          if (cachedImageData && cachedImageData.imageUrls.length > 0) {
+            // Use the cached images if they exist
+            logger.info(`Using ${cachedImageData.imageUrls.length} cached images for user ${message.author.id} in guild ${guildId}`);
+            
+            // Get conversation history for this user using write-through cache
+            let conversationHistory = await getUserConversation(message.author.id, guildId, threadId) || [];
+            
+            // Use the enhanced analyzeImages function with the cached images and conversation context
+            const imageDescription = await analyzeImages(
+              cachedImageData.imageUrls,
+              cleanedContent || "Tell me more about this image",
+              conversationHistory
+            );
+            
+            // Send the response
+            const response = await message.reply(imageDescription);
+            
+            // Update conversation history with this interaction
+            if (conversationHistory.length > 0) {
+              // First add the user's message with reference to cached images
+              conversationHistory.push({ 
+                role: "user", 
+                content: `${cleanedContent} [Referring to previously shared ${cachedImageData.imageUrls.length > 1 ? 'images' : 'image'}]` 
+              });
+              
+              // Then add Bri's response
+              conversationHistory.push({ 
+                role: "assistant", 
+                content: imageDescription 
+              });
+              
+              // Apply context length limits if needed
+              const contextLength = await getUserContextLength(message.author.id, guildId) || defaultContextLength;
+              if (conversationHistory.length > contextLength) {
+                conversationHistory = [conversationHistory[0], ...conversationHistory.slice(-(contextLength - 1))];
+              }
+              
+              // Save the updated conversation
+              await setUserConversation(message.author.id, guildId, conversationHistory, threadId);
+            }
+            
+            // Early return since we've processed the message
+            return true;
+          }
+        }
+      }
+      
+      // Continue with normal reply context processing for other users
       if (repliedToMessage.author.id !== message.client.user.id) {
         const repliedToAuthor = repliedToMessage.author.username;
         const repliedToContent = repliedToMessage.content;

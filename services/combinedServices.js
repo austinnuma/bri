@@ -174,6 +174,7 @@ export const openai = new OpenAI({
 let _defaultAskModel = process.env.DEFAULT_MODEL || 'gpt-4o-mini';
 const _summarizationModel = process.env.SUMMARIZATION_MODEL || 'gpt-3.5-turbo';
 const _embeddingModel = process.env.EMBEDDING_MODEL || 'text-embedding-ada-002';
+const _webSearchModel = process.env.WEB_SEARCH_MODEL || 'gpt-4o-search-preview';
 
 /**
  * Get the default model for ask queries
@@ -222,6 +223,107 @@ export function getSummarizationModel() {
  */
 export function getEmbeddingModel() {
   return _embeddingModel;
+}
+
+/**
+ * Gets the model used for web search
+ * @returns {string} - The web search model
+ */
+export function getWebSearchModel() {
+  return _webSearchModel;
+}
+
+/**
+ * Sends a query to OpenAI with web search capabilities
+ * @param {string} prompt - The user's question
+ * @param {string} [contextSize='medium'] - Search context size ('low', 'medium', 'high')
+ * @returns {Promise<Object>} - Response with text and source information
+ */
+export async function fetchOpenAISearchResponse(prompt, contextSize = 'medium') {
+  if (!prompt) {
+    logger.error("Prompt cannot be null or undefined");
+    throw new Error("Prompt cannot be null or undefined");
+  }
+  
+  try {
+    logger.info(`Sending web search query to OpenAI: "${prompt.substring(0, 50)}${prompt.length > 50 ? '...' : ''}"`);
+    
+    // System instruction to maintain Bri's personality
+    const systemInstructions = 
+      "You are Bri, a helpful AI assistant with the personality of a 14-year-old girl. " +
+      "While you have access to the latest information through web search, " +
+      "maintain your cheerful, energetic personality. Your answers should be " +
+      "helpful, accurate, and reflect your childlike enthusiasm. " +
+      "If you use information from the internet, cite your sources inline using [1], [2], etc. " +
+      "and try to use current and reliable sources.";
+    
+    // Create the messages array
+    const messages = [
+      { role: "system", content: systemInstructions },
+      { role: "user", content: prompt }
+    ];
+    
+    try {
+      // Make the API call with web search
+      const response = await openai.chat.completions.create({
+        model: _webSearchModel,
+        messages: messages,
+        max_tokens: 1500,
+        web_search_options: {
+          search_context_size: contextSize,
+        },
+      });
+      
+      // Extract the response content
+      const responseText = response.choices[0].message.content;
+      
+      // Extract annotations (source citations)
+      let sources = [];
+      if (response.choices[0].message.annotations) {
+        const annotations = response.choices[0].message.annotations;
+        
+        // Process URL citation annotations
+        for (const annotation of annotations) {
+          if (annotation.type === 'url_citation' && annotation.url_citation) {
+            sources.push({
+              title: annotation.url_citation.title || "Untitled Source",
+              url: annotation.url_citation.url || "#",
+              start_index: annotation.url_citation.start_index,
+              end_index: annotation.url_citation.end_index
+            });
+          }
+        }
+      }
+      
+      logger.info(`Received OpenAI search response (${responseText.length} chars, ${sources.length} sources)`);
+      
+      return {
+        text: responseText,
+        sources: sources,
+        usedSearch: true
+      };
+    } catch (error) {
+      logger.error("Error using OpenAI web search:", error);
+      
+      // Fallback to regular model without web search
+      const fallbackResult = await getChatCompletion({
+        model: _defaultAskModel,
+        messages: messages
+      });
+      
+      logger.info(`Received fallback OpenAI response (${fallbackResult.choices[0].message.content.length} chars)`);
+      
+      return {
+        text: fallbackResult.choices[0].message.content,
+        sources: [],
+        usedSearch: false,
+        fallback: true
+      };
+    }
+  } catch (error) {
+    logger.error("Error querying OpenAI:", error);
+    throw error;
+  }
 }
 
 /**
