@@ -17,9 +17,7 @@ import {
   getUserDynamicPrompt,
   setUserDynamicPrompt,
   batchGetUserSettings, // Import the batch function
-  warmupUserCache as warmupUserSettingsCache, // Renamed for clarity
-  cacheUserImages,
-  getCachedUserImages
+  warmupUserCache as warmupUserSettingsCache // Renamed for clarity
 } from './db/userSettings.js';
 import { splitMessage, replaceEmoticons } from './textUtils.js';
 import { openai, getChatCompletion, defaultAskModel, supabase } from '../services/combinedServices.js';
@@ -297,10 +295,8 @@ async function handleImageAttachments(message, cleanedContent, guildId, threadId
     // Send the response
     const response = await message.reply(imageDescription);
     
-    // Cache these image URLs so they can be referenced in future messages
-    // This enables the "image persistence" feature
-    cacheUserImages(message.author.id, guildId, imageUrls, message.id);
-    logger.info(`Cached ${imageUrls.length} images for user ${message.author.id} in guild ${guildId}`);
+    // No longer caching image URLs, we'll directly reprocess from the original message
+    logger.info(`Processed ${imageUrls.length} images for user ${message.author.id} in guild ${guildId}`);
     
     // Update conversation history with this interaction
     if (conversationHistory.length > 0) {
@@ -437,23 +433,24 @@ export async function handleLegacyMessage(message) {
       // Fetch the message being replied to
       const repliedToMessage = await message.channel.messages.fetch(message.reference.messageId);
       
-      // First handle replies to the bot's messages (which may reference previous images)
+      // First handle replies to the bot's messages
       if (repliedToMessage.author.id === message.client.user.id) {
-        // If this is a reply to the bot and the message doesn't have its own images
+        // If reply itself has image attachments, we'll handle them normally in the main image handling logic
         if (message.attachments.filter(isImageAttachment).size === 0) {
-          // Check if the user has cached images from a previous message
-          const cachedImageData = getCachedUserImages(message.author.id, guildId);
+          // Check if the message being replied to has image attachments
+          const repliedToImageAttachments = repliedToMessage.attachments.filter(isImageAttachment);
           
-          if (cachedImageData && cachedImageData.imageUrls.length > 0) {
-            // Use the cached images if they exist
-            logger.info(`Using ${cachedImageData.imageUrls.length} cached images for user ${message.author.id} in guild ${guildId}`);
+          if (repliedToImageAttachments.size > 0) {
+            // Get image URLs from the message being replied to
+            const imageUrls = repliedToImageAttachments.map(attachment => attachment.url);
+            logger.info(`Reprocessing ${imageUrls.length} images from replied message for user ${message.author.id} in guild ${guildId}`);
             
             // Get conversation history for this user using write-through cache
             let conversationHistory = await getUserConversation(message.author.id, guildId, threadId) || [];
             
-            // Use the enhanced analyzeImages function with the cached images and conversation context
+            // Analyze the images again with the new prompt
             const imageDescription = await analyzeImages(
-              cachedImageData.imageUrls,
+              imageUrls,
               cleanedContent || "Tell me more about this image",
               conversationHistory
             );
@@ -463,10 +460,10 @@ export async function handleLegacyMessage(message) {
             
             // Update conversation history with this interaction
             if (conversationHistory.length > 0) {
-              // First add the user's message with reference to cached images
+              // First add the user's message with reference to the replied-to images
               conversationHistory.push({ 
                 role: "user", 
-                content: `${cleanedContent} [Referring to previously shared ${cachedImageData.imageUrls.length > 1 ? 'images' : 'image'}]` 
+                content: `${cleanedContent} [Referring to previously shared ${imageUrls.length > 1 ? 'images' : 'image'} in message being replied to]` 
               });
               
               // Then add Bri's response
