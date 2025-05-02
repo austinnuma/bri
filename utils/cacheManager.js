@@ -517,10 +517,10 @@ export function getCachedUserImages(userId, guildId) {
 }
 
 /**
- * Get cache statistics
+ * Get enhanced cache statistics including the new image cache
  * @returns {Object} - Cache statistics
  */
-export function getCacheStats() {
+function getEnhancedCacheStats() {
   return {
     userCache: {
       size: userDataCache.size,
@@ -555,5 +555,6 @@ export {
   memoryCache,
   vectorSearchCache,
   queryCache,
-  imageCache
+  imageCache,
+  getEnhancedCacheStats as getCacheStats
 };
